@@ -1,0 +1,1691 @@
+<!DOCTYPE html>
+<html lang="pt-br" class="h-full bg-gray-100">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SISGA VIM/FOZ - Sistema de Gestão de Aquisições</title>
+    
+    <!-- 1. Tailwind CSS via CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'fiesc-blue': '#0d47a1', // Cor principal (baseada na sua planilha)
+                        'fiesc-blue-light': '#1565c0',
+                    },
+                },
+            }
+        }
+    </script>
+    
+    <!-- 2. Ícones (Heroicons) -->
+    <script type="module" src="https://unpkg.com/heroicons@2.1.3/24/outline/index.js"></script>
+    
+    <!-- 3. Scripts do Firebase (Módulos JS) -->
+    <script type="module">
+        // Importar os serviços necessários do Firebase
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { 
+            getAuth, 
+            signInWithEmailAndPassword, 
+            signOut, 
+            onAuthStateChanged 
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { 
+            getFirestore, 
+            collection, 
+            addDoc, 
+            doc, 
+            getDoc, 
+            getDocs, // <-- Adicionado getDocs
+            setDoc, // Para perfis de usuário
+            updateDoc, 
+            deleteDoc, 
+            onSnapshot, 
+            query, 
+            where,
+            Timestamp,
+            orderBy,
+            limit // NOVO: Para limitar resultados da pesquisa
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { 
+            getStorage, 
+            ref, 
+            uploadBytes, 
+            getDownloadURL 
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+
+        // --- CONFIGURAÇÃO DO FIREBASE ---
+        // LÓGICA CORRIGIDA: Usar diretamente a sua configuração fornecida
+        const firebaseConfig = {
+          apiKey: "AIzaSyAHAO1ZJrc5JYgut4tjcJX-vbKlEaFn6cQ",
+          authDomain: "comprassenai-40755.firebaseapp.com",
+          projectId: "comprassenai-40755",
+          storageBucket: "comprassenai-40755.firebasestorage.app",
+          messagingSenderId: "592503297730",
+          appId: "1:592503297730:web:cb40e3711d1f9647908d5b",
+          measurementId: "G-74W14C81WX"
+        };
+        
+        // --- INICIALIZAÇÃO DOS SERVIÇOS ---
+        let app, auth, db, storage, appId;
+        let currentUser = null;
+        let currentUserProfile = {}; // Perfil do usuário (Solicitante, Aquisicoes, Admin)
+        let unsubscribePedidos = null; // Para limpar o listener do onSnapshot
+        let unsubscribeLinks = null; // NOVO: Para links externos
+        let searchDebounceTimer = null; // NOVO: Timer para debounce da pesquisa
+
+        try {
+            app = initializeApp(firebaseConfig);
+            auth = getAuth(app);
+            db = getFirestore(app);
+            storage = getStorage(app);
+            setLogLevel('Debug'); // Ativa logs detalhados do Firestore no console
+            
+            // Usar o appId da configuração
+            appId = firebaseConfig.appId;
+
+            console.log("Sistema SISGA inicializado com Firebase.");
+            console.log("Usando Project ID:", firebaseConfig.projectId);
+            console.log("Usando App ID:", appId);
+        } catch (e) {
+            console.error("Erro ao inicializar o Firebase: ", e);
+            showNotification("Erro crítico: Não foi possível conectar ao banco de dados.", "error");
+        }
+        
+        // --- ESTADO GLOBAL DA APLICAÇÃO ---
+        const state = {
+            pedidos: [], // Armazena todos os pedidos carregados
+            unidades: [ // Pré-carregado com base nos seus arquivos
+                "SENAI Brusque", "SENAI SJB", "SESI 203", "SESI 236", "SESI 238", "SESI 2028", "SESI 2059",
+                "SENAI Itajaí", "SENAI BC", "SESI 211", "SESI 264", "SESI 277", "SESI 2033", "SESI 2055",
+                "SESI/SENAI DR"
+            ],
+            gruposDeCompra: [ // Baseado nos seus CSVs
+                "Alimentos",
+                "Serviços",
+                "Mobiliário",
+                "Equip. materiais médicos e odontológicos",
+                "Materiais de Expediente",
+                "EPI",
+                "Limpeza",
+                "Compra Regional",
+                "Contrato",
+                "Requisição CD",
+                "Fundo Rotativo",
+                "Outros"
+            ],
+            usuarios: [], // Para o módulo Admin
+            produtosBuscados: [], // NOVO: Armazena resultados da pesquisa de produtos
+            linksExternos: [] // NOVO: Para os links da navegação
+        };
+
+        const STATUS_MAP = {
+            "a-abrir-rn": { text: "A Abrir RN", color: "bg-blue-100 text-blue-800" },
+            "em-cotacao": { text: "Em Cotação", color: "bg-yellow-100 text-yellow-800" },
+            "registrado": { text: "Registrado", color: "bg-gray-100 text-gray-800" },
+            "aguardando-entrega": { text: "Aguardando Entrega", color: "bg-orange-100 text-orange-800" },
+            "entregue": { text: "Entregue", color: "bg-purple-100 text-purple-800" },
+            "aguardando-lancamento": { text: "Aguardando Lançamento", color: "bg-cyan-100 text-cyan-800" },
+            "finalizado": { text: "Finalizado", color: "bg-green-100 text-green-800" },
+            "cancelado": { text: "Cancelado", color: "bg-red-100 text-red-800" }
+        };
+        
+        // --- GERENCIAMENTO DE AUTENTICAÇÃO E PERFIL ---
+        
+        onAuthStateChanged(auth, async (user) => {
+            const loginPage = document.getElementById('login-page');
+            const appPage = document.getElementById('app-page');
+            const userEmailNav = document.getElementById('user-email-nav');
+            const userProfileNav = document.getElementById('user-profile-nav');
+
+            if (user) {
+                // Usuário está logado
+                currentUser = user;
+                
+                // Buscar o perfil do usuário no Firestore
+                // Caminho dos perfis: /artifacts/{appId}/public/data/user_profiles/{userId}
+                
+                const userId = user.uid;
+                const userProfileRef = doc(db, `artifacts/${appId}/public/data/user_profiles`, userId);
+
+                try {
+                    const docSnap = await getDoc(userProfileRef);
+                    if (docSnap.exists()) {
+                        currentUserProfile = docSnap.data();
+                        console.log("Perfil do usuário carregado:", currentUserProfile);
+                    } else {
+                        // Perfil não existe, criar um padrão (Solicitante)
+                        console.warn(`Nenhum perfil encontrado no Firestore para UID: ${userId}. A criar perfil 'Solicitante' padrão.`);
+                        currentUserProfile = {
+                            nome: user.email.split('@')[0],
+                            email: user.email,
+                            perfil: "Solicitante", // Perfil padrão
+                            unidade: state.unidades[0] // Unidade padrão
+                        };
+                        // Tenta salvar este perfil padrão
+                        try {
+                            await setDoc(userProfileRef, currentUserProfile);
+                        } catch (e) {
+                            console.error("Não foi possível salvar o perfil padrão:", e);
+                        }
+                    }
+                } catch (e) {
+                    console.error("Erro ao buscar perfil:", e);
+                    currentUserProfile = { nome: user.email, perfil: "Solicitante", unidade: state.unidades[0] };
+                }
+
+                // Atualizar UI
+                userEmailNav.textContent = currentUserProfile.nome || user.email;
+                userEmailNav.title = currentUserProfile.nome || user.email;
+                userProfileNav.textContent = `Perfil: ${currentUserProfile.perfil || 'Solicitante'}`;
+                loginPage.classList.add('hidden');
+                appPage.classList.remove('hidden');
+
+                // Ajustar UI com base no perfil
+                setupUIForProfile();
+                
+                // Mostrar o Dashboard
+                showPage('dashboard');
+
+                // Carregar os dados
+                fetchPedidos();
+                fetchLinksExternos(); // NOVO: Carregar links
+                
+                // Carregar usuários (se for Admin)
+                if (currentUserProfile.perfil === 'Admin') {
+                    fetchUsuarios();
+                }
+
+            } else {
+                // Usuário está deslogado
+                currentUser = null;
+                currentUserProfile = {};
+                loginPage.classList.remove('hidden');
+                appPage.classList.add('hidden');
+
+                // Limpar listeners de dados
+                if (unsubscribePedidos) unsubscribePedidos();
+                if (unsubscribeLinks) unsubscribeLinks(); // NOVO
+                
+                state.pedidos = [];
+                state.linksExternos = [];
+                renderNavLinks(); // NOVO: Limpa os links ao deslogar
+            }
+        });
+
+        function setupUIForProfile() {
+            const perfil = currentUserProfile.perfil || "Solicitante";
+            
+            const adminNav = document.getElementById('nav-admin');
+            const btnNovoPedido = document.getElementById('btn-novo-pedido');
+
+            // Resetar visibilidade
+            adminNav.classList.add('hidden');
+            btnNovoPedido.classList.remove('hidden');
+
+            if (perfil === 'Admin') {
+                adminNav.classList.remove('hidden');
+            } else if (perfil === 'Aquisicoes') {
+                // Aquisições não vêem Admin, mas têm funcionalidade completa de edição
+            } else { // Solicitante
+                // Solicitantes podem criar pedidos, mas têm edição limitada
+            }
+        }
+
+        // --- NAVEGAÇÃO ENTRE PÁGINAS ---
+        
+        function showPage(pageId) {
+            // Esconde todas as páginas
+            document.querySelectorAll('.page-content').forEach(page => {
+                page.classList.add('hidden');
+            });
+            // Mostra a página solicitada
+            const page = document.getElementById(pageId);
+            if (page) {
+                page.classList.remove('hidden');
+            }
+            // Atualiza o menu lateral
+            document.querySelectorAll('.nav-link').forEach(link => {
+                link.classList.remove('bg-fiesc-blue-light', 'text-white');
+                link.classList.add('text-blue-100', 'hover:bg-fiesc-blue-light', 'hover:text-white');
+            });
+            const activeLink = document.querySelector(`.nav-link[data-page="${pageId}"]`);
+            if (activeLink) {
+                activeLink.classList.add('bg-fiesc-blue-light', 'text-white');
+                activeLink.classList.remove('text-blue-100', 'hover:bg-fiesc-blue-light', 'hover:text-white');
+            }
+            
+            // Ações específicas da página
+            if (pageId === 'dashboard') {
+                renderDashboard();
+            } else if (pageId === 'solicitacoes') {
+                renderPedidosTable(state.pedidos);
+            } else if (pageId === 'admin') {
+                renderAdminPage();
+                renderAdminLinkList(); // NOVO: Renderiza lista de links no admin
+            }
+            // REMOVIDO: else if para 'base-conhecimento'
+        }
+        
+        // --- RENDERIZAÇÃO DAS PÁGINAS ---
+        
+        function renderDashboard() {
+            const stats = {
+                total: state.pedidos.length,
+                'a-abrir-rn': 0,
+                'em-cotacao': 0,
+                'aguardando-entrega': 0,
+                'entregue': 0,
+                'finalizado': 0,
+                'pendencia': 0 // Exemplo de pendência (pode ser "entregue" mas sem NF)
+            };
+
+            let pedidosFiltrados = state.pedidos;
+            // Se for solicitante, filtra as estatísticas
+            if (currentUserProfile.perfil === 'Solicitante') {
+                pedidosFiltrados = state.pedidos.filter(p => p.solicitanteId === currentUser.uid);
+            }
+
+            pedidosFiltrados.forEach(p => {
+                stats[p.status] = (stats[p.status] || 0) + 1;
+                if (p.status === 'entregue' && !p.urlNotaFiscal) {
+                    stats['pendencia']++;
+                }
+            });
+            
+            stats.total = pedidosFiltrados.length; // Atualiza o total para os filtrados
+
+            document.getElementById('stat-total').textContent = stats.total;
+            document.getElementById('stat-abrir-rn').textContent = stats['a-abrir-rn'];
+            document.getElementById('stat-aguardando-entrega').textContent = stats['aguardando-entrega'];
+            document.getElementById('stat-pendencia-nf').textContent = stats['pendencia'];
+
+            // Renderiza a tabela de pedidos recentes no dashboard
+            const pedidosRecentes = [...pedidosFiltrados]
+                .sort((a, b) => (b.dataSolicitacao?.toMillis() || 0) - (a.dataSolicitacao?.toMillis() || 0))
+                .slice(0, 5); // Pega os 5 mais recentes
+            
+            renderPedidosTable(pedidosRecentes, 'tabela-pedidos-dashboard');
+        }
+
+        function renderPedidosTable(pedidos, tableId = 'tabela-pedidos-solicitacoes') {
+            const tableBody = document.getElementById(tableId)?.querySelector('tbody');
+            if (!tableBody) return;
+
+            tableBody.innerHTML = ''; // Limpa a tabela
+            
+            // Filtrar pedidos com base no perfil
+            const perfil = currentUserProfile.perfil || "Solicitante";
+            let pedidosFiltrados = pedidos;
+
+            // Apenas Solicitantes vêm uma lista filtrada
+            if (perfil === 'Solicitante') {
+                // Um solicitante vê pedidos criados por ele OU onde ele é o demandante
+                pedidosFiltrados = pedidos.filter(p => 
+                    p.solicitanteId === currentUser.uid || 
+                    p.nomeDemandante === currentUserProfile.nome
+                );
+            }
+            
+            if (pedidosFiltrados.length === 0) {
+                tableBody.innerHTML = `<tr><td colspan="9" class="text-center py-4 text-gray-500">Nenhum pedido encontrado.</td></tr>`;
+                return;
+            }
+
+            pedidosFiltrados.forEach(pedido => {
+                const status = STATUS_MAP[pedido.status] || { text: pedido.status, color: "bg-gray-100 text-gray-800" };
+                const dataSol = pedido.dataSolicitacao?.toDate ? pedido.dataSolicitacao.toDate() : new Date();
+                const tr = document.createElement('tr');
+                tr.className = "bg-white even:bg-gray-50";
+                
+                tr.innerHTML = `
+                    <td class="whitespace-nowrap px-3 py-4 text-sm text-gray-900">
+                        ${pedido.numRN || '---'}
+                        <div class="text-gray-500 text-xs">${pedido.numOC || ''}</div>
+                    </td>
+                    <td class="whitespace-nowrap px-3 py-4 text-sm text-gray-900">
+                        ${pedido.unidade}
+                        <div class="text-gray-500 text-xs" title="Solicitante: ${pedido.solicitanteNome || ''}">${pedido.nomeDemandante || (pedido.solicitanteNome || pedido.solicitanteEmail)}</div>
+                    </td>
+                    <td class="max-w-xs truncate px-3 py-4 text-sm text-gray-700" title="${pedido.descricao || 'Sem observações'}">
+                        ${pedido.nomeProduto || '---'}
+                        <div class="text-gray-500 text-xs">${pedido.variacao || ''}</div>
+                    </td>
+                    <td class="whitespace-nowrap px-3 py-4 text-sm text-gray-700">${pedido.modalidade || '---'}</td>
+                    <td class="whitespace-nowrap px-3 py-4 text-sm text-gray-700">${dataSol.toLocaleDateString('pt-BR')}</td>
+                    <td class="whitespace-nowrap px-3 py-4 text-sm text-gray-900 font-medium">
+                        ${pedido.quantidade || 1} x R$ ${parseFloat(pedido.valorUnitario || 0).toFixed(2)}
+                        <div class="font-bold text-xs">Total: R$ ${parseFloat(pedido.valorTotal || 0).toFixed(2)}</div>
+                    </td>
+                    <td class="whitespace-nowrap px-3 py-4 text-sm">
+                        <span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ${status.color}">
+                            ${status.text}
+                        </span>
+                    </td>
+                    <td class="relative whitespace-nowrap py-4 pl-3 pr-4 text-right text-sm font-medium sm:pr-6">
+                        <button data-id="${pedido.id}" class="btn-editar-pedido text-fiesc-blue hover:text-fiesc-blue-light">Editar</button>
+                    </td>
+                `;
+                tableBody.appendChild(tr);
+            });
+
+            // Adicionar listeners de evento aos botões de editar
+            tableBody.querySelectorAll('.btn-editar-pedido').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    openPedidoModal(btn.dataset.id);
+                });
+            });
+        }
+        
+        // REMOVIDA: function renderBaseConhecimento() {}
+
+        function renderAdminPage() {
+            // Popula o dropdown de unidades no formulário de admin
+            const selectUnidade = document.getElementById('admin-user-unidade');
+            selectUnidade.innerHTML = '<option value="">Selecione uma unidade</option>';
+            state.unidades.forEach(unidade => {
+                selectUnidade.innerHTML += `<option value="${unidade}">${unidade}</option>`;
+            });
+            
+            // Renderiza a tabela de usuários
+            const tableBody = document.getElementById('tabela-usuarios');
+            tableBody.innerHTML = '';
+            if (state.usuarios.length === 0) {
+                tableBody.innerHTML = `<tr><td colspan="5" class="p-4 text-center text-gray-500">Nenhum perfil de utilizador encontrado.</td></tr>`;
+                return;
+            }
+
+            // ATUALIZAÇÃO: Adiciona o cabeçalho da tabela de Ações
+            const tableHead = tableBody.closest('table').querySelector('thead tr');
+            if (tableHead) {
+                tableHead.innerHTML = `
+                    <th class="py-3.5 px-3 text-left text-sm font-semibold text-gray-900">Nome</th>
+                    <th class="py-3.5 px-3 text-left text-sm font-semibold text-gray-900">Email</th>
+                    <th class="py-3.5 px-3 text-left text-sm font-semibold text-gray-900">Perfil</th>
+                    <th class="py-3.5 px-3 text-left text-sm font-semibold text-gray-900">Unidade</th>
+                    <th class="py-3.5 px-3 text-left text-sm font-semibold text-gray-900">Ações</th>
+                `;
+            }
+
+            state.usuarios.forEach(user => {
+                const tr = document.createElement('tr');
+                tr.className = "bg-white even:bg-gray-50";
+                
+                // ATUALIZAÇÃO: Adiciona a <td> com o botão de editar
+                tr.innerHTML = `
+                    <td class="whitespace-nowrap py-4 px-3 text-sm font-medium text-gray-900">${user.nome}</td>
+                    <td class="whitespace-nowrap px-3 py-4 text-sm text-gray-500">${user.email}</td>
+                    <td class="whitespace-nowrap px-3 py-4 text-sm text-gray-500">${user.perfil}</td>
+                    <td class="whitespace-nowrap px-3 py-4 text-sm text-gray-500">${user.unidade}</td>
+                    <td class="whitespace-nowrap px-3 py-4 text-sm text-fiesc-blue">
+                        <button 
+                            type="button" 
+                            class="btn-edit-user font-medium hover:underline" 
+                            data-uid="${user.id}">
+                            Editar
+                        </button>
+                    </td>
+                `;
+                tableBody.appendChild(tr);
+            });
+            
+            // O listener para os botões 'btn-edit-user' é adicionado em attachGlobalListeners
+            // usando delegação de eventos.
+        }
+
+        // NOVO: Renderiza os links no menu de navegação
+        function renderNavLinks() {
+            const placeholder = document.getElementById('dynamic-links-placeholder');
+            placeholder.innerHTML = ''; // Limpa links antigos
+            
+            // Esconde o divisor se não houver links
+            if (state.linksExternos.length === 0) {
+                placeholder.classList.add('hidden');
+                return;
+            }
+            
+            placeholder.classList.remove('hidden');
+            
+            state.linksExternos.forEach(link => {
+                const li = document.createElement('li');
+                li.innerHTML = `
+                    <a href="${link.url}" target="_blank" rel="noopener noreferrer" class="nav-link group flex items-center gap-x-3 rounded-md p-2 text-sm font-semibold leading-6 text-blue-100 hover:bg-fiesc-blue-light hover:text-white">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6"><path stroke-linecap="round" stroke-linejoin="round" d="M13.5 6H5.25A2.25 2.25 0 0 0 3 8.25v10.5A2.25 2.25 0 0 0 5.25 21h10.5A2.25 2.25 0 0 0 18 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" /></svg>
+                        ${link.nome}
+                    </a>
+                `;
+                placeholder.appendChild(li);
+            });
+        }
+
+        // NOVO: Renderiza a lista de links no painel de admin
+        function renderAdminLinkList() {
+            const listContainer = document.getElementById('lista-links-admin');
+            listContainer.innerHTML = '';
+            
+            if (state.linksExternos.length === 0) {
+                listContainer.innerHTML = '<p class="text-sm text-gray-500">Nenhum link externo criado.</p>';
+                return;
+            }
+
+            state.linksExternos.forEach(link => {
+                const div = document.createElement('div');
+                div.className = "flex items-center justify-between p-2 bg-gray-50 rounded-md";
+                div.innerHTML = `
+                    <div>
+                        <p class="text-sm font-medium text-gray-900">${link.nome}</p>
+                        <p class="text-xs text-gray-500 truncate" title="${link.url}">${link.url}</p>
+                    </div>
+                    <div>
+                        <!-- <button type="button" data-id="${link.id}" class="btn-edit-link text-fiesc-blue hover:text-fiesc-blue-light p-1"> (Para edição futura)
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0 1 15.75 21H5.25A2.25 2.25 0 0 1 3 18.75V8.25A2.25 2.25 0 0 1 5.25 6H10" /></svg>
+                        </button> -->
+                        <button type="button" data-id="${link.id}" class="btn-delete-link text-red-600 hover:text-red-800 p-1">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12.54 0c.07-.042.142-.082.215-.124m12.11 0a-3.004 3.004 0 0 0-3.478-.397m0 0c-.438-.052-.877-.102-1.32-.148m-3.478-.397c-.443.046-.88.092-1.32.148m0 0l-1.06-1.06A.75.75 0 0 1 5.25 4.5h3.879c.29 0 .578.117.78.327l1.06 1.06m0 0c.443.046.88.092 1.32.148" /></svg>
+                        </button>
+                    </div>
+                `;
+                listContainer.appendChild(div);
+            });
+        }
+
+        // --- LÓGICA DE DADOS (FIRESTORE) ---
+        
+        function getPedidosCollectionRef() {
+            // Todos os pedidos ficam numa coleção pública
+            // /artifacts/{appId}/public/data/pedidos
+            return collection(db, `artifacts/${appId}/public/data/pedidos`);
+        }
+        
+        function getUsuariosCollectionRef() {
+            // /artifacts/{appId}/public/data/user_profiles
+            return collection(db, `artifacts/${appId}/public/data/user_profiles`);
+        }
+        
+        // NOVO: Referência para a coleção de links
+        function getLinksCollectionRef() {
+            // /artifacts/{appId}/public/data/links_externos
+            return collection(db, `artifacts/${appId}/public/data/links_externos`);
+        }
+
+        // NOVO: Referência para a coleção de produtos
+        function getProdutosCollectionRef() {
+            // /artifacts/{appId}/public/data/produtos
+            return collection(db, `artifacts/${appId}/public/data/produtos`);
+        }
+
+        async function fetchPedidos() {
+            if (unsubscribePedidos) {
+                unsubscribePedidos(); // Limpa o listener anterior
+            }
+            
+            const pedidosCollection = getPedidosCollectionRef();
+            // Ordenar por data de solicitação, mais recentes primeiro
+            const q = query(pedidosCollection, orderBy('dataSolicitacao', 'desc')); 
+            
+            console.log(`Carregando pedidos de: ${pedidosCollection.path}`);
+            
+            unsubscribePedidos = onSnapshot(q, (querySnapshot) => {
+                state.pedidos = [];
+                querySnapshot.forEach((doc) => {
+                    state.pedidos.push({ id: doc.id, ...doc.data() });
+                });
+                
+                console.log(`Total de ${state.pedidos.length} pedidos carregados.`);
+                
+                // Re-renderizar a página atual (dashboard ou solicitações)
+                const activePage = document.querySelector('.page-content:not(.hidden)')?.id;
+                if (activePage === 'dashboard') {
+                    renderDashboard();
+                } else if (activePage === 'solicitacoes') {
+                    renderPedidosTable(state.pedidos);
+                }
+                
+            }, (error) => {
+                console.error("Erro ao buscar pedidos (onSnapshot): ", error);
+                showNotification("Erro ao carregar pedidos em tempo real.", "error");
+            });
+        }
+
+        // NOVO: Busca os links externos
+        async function fetchLinksExternos() {
+            if (unsubscribeLinks) unsubscribeLinks();
+            
+            const linksCollection = getLinksCollectionRef();
+            // (Optional: add orderBy('nome'))
+            const q = query(linksCollection); 
+            
+            unsubscribeLinks = onSnapshot(q, (querySnapshot) => {
+                state.linksExternos = [];
+                querySnapshot.forEach((doc) => {
+                    state.linksExternos.push({ id: doc.id, ...doc.data() });
+                });
+                console.log(`Total de ${state.linksExternos.length} links externos carregados.`);
+                
+                // Renderizar em dois lugares:
+                renderNavLinks(); // A lista no menu lateral
+                
+                if (document.getElementById('admin').classList.contains('hidden') === false) {
+                    renderAdminLinkList(); // A lista de gerenciamento no painel Admin
+                }
+            }, (error) => {
+                console.error("Erro ao buscar links externos:", error);
+            });
+        }
+        
+        async function fetchUsuarios() {
+            // Só o Admin deve chamar isto
+            const usuariosCollection = getUsuariosCollectionRef();
+            const q = query(usuariosCollection);
+            
+            onSnapshot(q, (querySnapshot) => {
+                state.usuarios = [];
+                querySnapshot.forEach((doc) => {
+                    state.usuarios.push({ id: doc.id, ...doc.data() });
+                });
+                console.log(`Total de ${state.usuarios.length} perfis de utilizador carregados.`);
+                // Se a página de admin estiver ativa, renderiza
+                if (document.getElementById('admin').classList.contains('hidden') === false) {
+                    renderAdminPage();
+                }
+            }, (error) => {
+                console.error("Erro ao buscar perfis de utilizador:", error);
+            });
+        }
+        
+        async function savePedido(pedidoData, pedidoId = null) {
+            const form = document.getElementById('form-pedido');
+            const fileOrcamento = form.fileOrcamento.files[0];
+            const fileNotaFiscal = form.fileNotaFiscal.files[0];
+            const submitButton = document.getElementById('btn-salvar-pedido');
+            submitButton.disabled = true;
+            submitButton.textContent = "A Salvar...";
+            
+            try {
+                // 1. Upload de Arquivos (se houver)
+                if (fileOrcamento) {
+                    const path = `orcamentos/${pedidoId || Date.now()}/${fileOrcamento.name}`;
+                    const url = await uploadFile(fileOrcamento, path);
+                    pedidoData.urlOrcamento = url;
+                }
+                if (fileNotaFiscal) {
+                    const path = `notasfiscais/${pedidoId || Date.now()}/${fileNotaFiscal.name}`;
+                    const url = await uploadFile(fileNotaFiscal, path);
+                    pedidoData.urlNotaFiscal = url;
+                }
+
+                // 2. Salvar dados no Firestore
+                const pedidosCollection = getPedidosCollectionRef();
+                
+                if (pedidoId) {
+                    // Atualizar pedido existente
+                    const pedidoRef = doc(pedidosCollection, pedidoId);
+                    await updateDoc(pedidoRef, pedidoData);
+                    showNotification("Pedido atualizado com sucesso!", "success");
+                } else {
+                    // Criar novo pedido
+                    pedidoData.dataSolicitacao = Timestamp.now();
+                    pedidoData.solicitanteId = currentUser.uid;
+                    pedidoData.solicitanteEmail = currentUser.email;
+                    pedidoData.solicitanteNome = currentUserProfile.nome || currentUser.email.split('@')[0];
+                    await addDoc(pedidosCollection, pedidoData);
+                    showNotification("Solicitação criada com sucesso!", "success");
+                }
+                
+                closePedidoModal();
+
+            } catch (e) {
+                console.error("Erro ao salvar pedido: ", e);
+                showNotification(`Erro ao salvar: ${e.message}`, "error");
+            } finally {
+                submitButton.disabled = false;
+                submitButton.textContent = "Salvar Pedido";
+            }
+        }
+        
+        async function uploadFile(file, path) {
+            if (!file) return null;
+            
+            // Usar um caminho com o appId
+            const fullPath = `artifacts/${appId}/${path}`;
+            const storageRef = ref(storage, fullPath);
+            
+            console.log(`Fazendo upload para: ${fullPath}`);
+            await uploadBytes(storageRef, file);
+            const downloadURL = await getDownloadURL(storageRef);
+            console.log(`Arquivo disponível em: ${downloadURL}`);
+            return downloadURL;
+        }
+
+        // --- GERENCIAMENTO DE MODAIS ---
+        
+        function openPedidoModal(pedidoId = null) {
+            const modal = document.getElementById('modal-pedido');
+            const form = document.getElementById('form-pedido');
+            const modalTitle = document.getElementById('modal-pedido-title');
+            
+            form.reset(); // Limpa o formulário
+            form.dataset.pedidoId = ''; // Limpa o ID
+            // NOVO: Limpa os resultados da pesquisa
+            document.getElementById('pedido-search-results').innerHTML = '';
+            document.getElementById('pedido-search-produto').value = '';
+
+            // Popula dropdown de unidades
+            const selectUnidade = document.getElementById('pedido-unidade');
+            selectUnidade.innerHTML = '';
+            state.unidades.forEach(unidade => {
+                selectUnidade.innerHTML += `<option value="${unidade}">${unidade}</option>`;
+            });
+            
+            // Popula dropdown de Grupos de Compra
+            const selectGrupo = document.getElementById('pedido-grupoDeCompra');
+            selectGrupo.innerHTML = '<option value="">Selecione um grupo</option>';
+            state.gruposDeCompra.forEach(grupo => {
+                selectGrupo.innerHTML += `<option value="${grupo}">${grupo}</option>`;
+            });
+
+            // Popula dropdown de status
+            const selectStatus = document.getElementById('pedido-status');
+            selectStatus.innerHTML = '';
+            for (const [key, value] of Object.entries(STATUS_MAP)) {
+                selectStatus.innerHTML += `<option value="${key}">${value.text}</option>`;
+            }
+
+            // Limpar links de arquivos antigos
+            document.getElementById('link-orcamento').href = '#';
+            document.getElementById('link-orcamento').classList.add('hidden');
+            document.getElementById('link-nf').href = '#';
+            document.getElementById('link-nf').classList.add('hidden');
+
+            // Ajustar UI para perfil
+            const perfil = currentUserProfile.perfil || "Solicitante";
+            const camposAquisicoes = document.getElementById('campos-aquisicoes');
+            
+            // ATUALIZAÇÃO: Gerencia visibilidade dos campos de Aquisição E Modalidade
+            const campoModalidade = document.getElementById('campo-modalidade-container');
+            if (perfil === 'Admin' || perfil === 'Aquisicoes') {
+                camposAquisicoes.classList.remove('hidden');
+                campoModalidade.classList.remove('hidden'); // Admin/Aquisicoes veem Modalidade
+            } else { // Solicitante
+                camposAquisicoes.classList.add('hidden');
+                campoModalidade.classList.add('hidden'); // Solicitante NÃO vê Modalidade
+            }
+
+            if (pedidoId) {
+                // Modo Edição
+                modalTitle.textContent = "Editar Solicitação de Compra";
+                const pedido = state.pedidos.find(p => p.id === pedidoId);
+                if (pedido) {
+                    form.dataset.pedidoId = pedidoId;
+                    
+                    // Popula campos do solicitante
+                    form.unidade.value = pedido.unidade;
+                    form.nomeDemandante.value = pedido.nomeDemandante || ''; 
+                    
+                    // ATUALIZAÇÃO: Popula campos separados
+                    form.cr.value = pedido.cr || ''; 
+                    form.projeto.value = pedido.projeto || '';
+
+                    form.modalidade.value = pedido.modalidade;
+                    form.grupoDeCompra.value = pedido.grupoDeCompra || ''; 
+                    form.codigoProduto.value = pedido.codigoProduto || ''; 
+                    form.nomeProduto.value = pedido.nomeProduto || ''; 
+                    form.variacao.value = pedido.variacao || ''; 
+                    form.quantidade.value = pedido.quantidade || 1; 
+                    form.valorUnitario.value = pedido.valorUnitario || 0; 
+                    form.valorTotal.value = pedido.valorTotal || 0;
+                    form.descricao.value = pedido.descricao;
+                    
+                    if (pedido.urlOrcamento) {
+                        const link = document.getElementById('link-orcamento');
+                        link.href = pedido.urlOrcamento;
+                        link.classList.remove('hidden');
+                    }
+
+                    // Popula campos de aquisições (se tiver permissão)
+                    if (perfil === 'Admin' || perfil === 'Aquisicoes') {
+                        form.numRN.value = pedido.numRN || '';
+                        form.numOC.value = pedido.numOC || '';
+                        // Formatar a data para o input type="date" (YYYY-MM-DD)
+                        if (pedido.dataPrevisao) {
+                            try {
+                                // Tenta converter se for timestamp
+                                const date = pedido.dataPrevisao.toDate ? pedido.dataPrevisao.toDate() : new Date(pedido.dataPrevisao);
+                                form.dataPrevisao.value = date.toISOString().split('T')[0];
+                            } catch(e) {
+                                // Se já for string YYYY-MM-DD
+                                form.dataPrevisao.value = pedido.dataPrevisao;
+                            }
+                        } else {
+                            form.dataPrevisao.value = '';
+                        }
+                        
+                        form.status.value = pedido.status;
+                        
+                        if (pedido.urlNotaFiscal) {
+                            const link = document.getElementById('link-nf');
+                            link.href = pedido.urlNotaFiscal;
+                            link.classList.remove('hidden');
+                        }
+                    }
+                }
+            } else {
+                // Modo Criação
+                modalTitle.textContent = "Nova Solicitação de Compra";
+                form.status.value = "a-abrir-rn"; // Status inicial
+                // Preenche a unidade do usuário logado
+                form.unidade.value = currentUserProfile.unidade || state.unidades[0];
+                form.nomeDemandante.value = currentUserProfile.nome || ''; // Preenche o demandante com o solicitante por padrão
+                form.quantidade.value = 1;
+                form.valorUnitario.value = 0.00;
+                form.valorTotal.value = 0.00;
+            }
+            
+            modal.classList.remove('hidden');
+        }
+
+        function closePedidoModal() {
+            const modal = document.getElementById('modal-pedido');
+            modal.classList.add('hidden');
+        }
+
+        // --- NOVAS FUNÇÕES DE GESTÃO DO FORMULÁRIO ADMIN ---
+
+        /**
+         * Preenche o formulário de admin com os dados de um usuário existente.
+         */
+        function populateAdminForm(uid) {
+            const user = state.usuarios.find(u => u.id === uid);
+            if (!user) {
+                showNotification("Utilizador não encontrado.", "error");
+                return;
+            }
+
+            const form = document.getElementById('form-admin-user');
+            form.uid.value = user.id;
+            form.email.value = user.email;
+            form.nome.value = user.nome;
+            form.perfil.value = user.perfil;
+            form.unidade.value = user.unidade;
+
+            // Bloqueia o campo UID para evitar edição acidental
+            form.uid.readOnly = true;
+            form.uid.classList.add('bg-gray-200', 'cursor-not-allowed');
+
+            // Foca no nome para edição
+            form.nome.focus();
+        }
+
+        /**
+         * Limpa o formulário de admin e reativa o campo UID.
+         */
+        function resetAdminForm() {
+            const form = document.getElementById('form-admin-user');
+            form.reset();
+            
+            // Libera o campo UID
+            form.uid.readOnly = false;
+            form.uid.classList.remove('bg-gray-200', 'cursor-not-allowed');
+        }
+
+        // --- HANDLERS DE EVENTOS ---
+        
+        function attachGlobalListeners() {
+            // --- Login / Logout ---
+            document.getElementById('login-form').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const email = e.target.email.value;
+                const password = e.target.password.value;
+                const btn = e.target.querySelector('button');
+                btn.disabled = true;
+                btn.textContent = "A Entrar...";
+                
+                try {
+                    await signInWithEmailAndPassword(auth, email, password);
+                    // O onAuthStateChanged vai cuidar de mudar a UI
+                } catch (error) {
+                    // MELHORIA: Diagnóstico de erro específico
+                    console.error("Erro de login:", error.message, error.code);
+                    if (error.code === 'auth/operation-not-allowed') {
+                        showNotification("Erro: Operação não permitida. Verifique se a 'Identity Toolkit API' está ATIVA no seu projeto Google Cloud.", "error");
+                    } else if (error.code === 'auth/invalid-credential') {
+                        showNotification("Email ou senha inválidos.", "error");
+                    } else {
+                        showNotification(`Erro de login: ${error.code}`, "error");
+                    }
+                } finally {
+                    btn.disabled = false;
+                    btn.textContent = "Entrar";
+                }
+            });
+
+            document.getElementById('btn-logout').addEventListener('click', async () => {
+                await signOut(auth);
+                // O onAuthStateChanged vai cuidar de mudar a UI
+            });
+            
+            // --- Navegação ---
+            document.querySelectorAll('.nav-link').forEach(link => {
+                link.addEventListener('click', () => {
+                    // NOVO: Apenas chama showPage se for um link interno (tiver data-page)
+                    if (link.dataset.page) {
+                        showPage(link.dataset.page);
+                    }
+                });
+            });
+
+            // --- Modal de Pedido ---
+            document.getElementById('btn-novo-pedido').addEventListener('click', () => {
+                openPedidoModal();
+            });
+            document.getElementById('btn-fechar-modal-pedido').addEventListener('click', closePedidoModal);
+            
+            // Cálculo de Valor Total
+            const qtyInput = document.getElementById('pedido-quantidade');
+            const unitPriceInput = document.getElementById('pedido-valorUnitario');
+            const totalPriceInput = document.getElementById('pedido-valorTotal');
+
+            const calculateTotal = () => {
+                const qty = parseFloat(qtyInput.value) || 0;
+                const unitPrice = parseFloat(unitPriceInput.value) || 0;
+                totalPriceInput.value = (qty * unitPrice).toFixed(2);
+            };
+            qtyInput.addEventListener('input', calculateTotal);
+            unitPriceInput.addEventListener('input', calculateTotal);
+
+            // --- NOVO: Lógica de Pesquisa de Produto ---
+            const searchInput = document.getElementById('pedido-search-produto');
+            searchInput.addEventListener('keyup', (e) => {
+                const searchTerm = e.target.value;
+                // Debounce: atrasa a pesquisa para não sobrecarregar o Firestore
+                clearTimeout(searchDebounceTimer);
+                if (searchTerm.length < 3) {
+                    // Limpa os resultados se a pesquisa for muito curta
+                    document.getElementById('pedido-search-results').innerHTML = '';
+                    state.produtosBuscados = [];
+                    return;
+                }
+                searchDebounceTimer = setTimeout(() => {
+                    searchProducts(searchTerm);
+                }, 300); // Aguarda 300ms após o utilizador parar de digitar
+            });
+
+            // Handler de Submit do Formulário
+            document.getElementById('form-pedido').addEventListener('submit', (e) => {
+                e.preventDefault();
+                const form = e.target;
+                const pedidoId = form.dataset.pedidoId || null;
+                
+                const data = {
+                    // Campos do Solicitante
+                    unidade: form.unidade.value,
+                    nomeDemandante: form.nomeDemandante.value, 
+                    
+                    // ATUALIZAÇÃO: Campos separados
+                    cr: form.cr.value,
+                    projeto: form.projeto.value,
+
+                    modalidade: form.modalidade.value,
+                    grupoDeCompra: form.grupoDeCompra.value, 
+                    codigoProduto: form.codigoProduto.value, 
+                    nomeProduto: form.nomeProduto.value, 
+                    variacao: form.variacao.value, 
+                    quantidade: parseFloat(form.quantidade.value) || 1, 
+                    valorUnitario: parseFloat(form.valorUnitario.value) || 0, 
+                    valorTotal: parseFloat(form.valorTotal.value) || 0, // Agora é calculado
+                    descricao: form.descricao.value, // Renomeado para "Observações"
+                    // Campos de Aquisições
+                    numRN: form.numRN.value,
+                    numOC: form.numOC.value,
+                    dataPrevisao: form.dataPrevisao.value,
+                    status: form.status.value,
+                };
+                
+                savePedido(data, pedidoId);
+            });
+            
+            // --- Admin: Criar/Atualizar Usuário ---
+            document.getElementById('form-admin-user').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const form = e.target;
+                const uid = form.uid.value; // Adicionar campo UID no HTML
+                const email = form.email.value;
+                const nome = form.nome.value;
+                const perfil = form.perfil.value;
+                const unidade = form.unidade.value;
+                const btn = e.target.querySelector('button[type="submit"]'); // Seleciona o botão de submit
+                
+                if (currentUserProfile.perfil !== 'Admin') {
+                    showNotification("Apenas Admins podem criar utilizadores.", "error");
+                    return;
+                }
+                
+                if (!uid) {
+                    showNotification("Erro: UID do utilizador é obrigatório. Crie o utilizador no Firebase Auth Console primeiro e cole o UID aqui.", "error");
+                    return;
+                }
+
+                btn.disabled = true;
+                btn.textContent = "A Salvar...";
+
+                try {
+                    // O Admin cria o perfil no Firestore
+                    const perfilData = {
+                        nome: nome,
+                        email: email,
+                        perfil: perfil,
+                        unidade: unidade
+                    };
+                    
+                    const perfilRef = doc(db, `artifacts/${appId}/public/data/user_profiles`, uid);
+                    await setDoc(perfilRef, perfilData); // setDoc (cria ou sobrescreve)
+                    
+                    showNotification("Perfil de utilizador criado/atualizado com sucesso!", "success");
+                    
+                    // ATUALIZAÇÃO: Limpa o formulário e reativa o campo UID
+                    resetAdminForm(); 
+                    // fetchUsuarios() será chamado automaticamente pelo onSnapshot
+
+                } catch (error) {
+                    console.error("Erro ao criar perfil:", error);
+                    showNotification(`Erro: ${error.message}`, "error");
+                } finally {
+                    btn.disabled = false;
+                    btn.textContent = "Salvar Perfil";
+                }
+            });
+
+            // NOVO: Listener para o botão Limpar do formulário admin
+            document.getElementById('btn-clear-admin-form').addEventListener('click', () => {
+                resetAdminForm();
+            });
+
+            // NOVO: Listener para os botões "Editar" na tabela (usando delegação de eventos)
+            const userTableBody = document.getElementById('tabela-usuarios');
+            userTableBody.addEventListener('click', (e) => {
+                // Verifica se o clique foi em um botão "Editar"
+                if (e.target && e.target.classList.contains('btn-edit-user')) {
+                    const uid = e.target.dataset.uid;
+                    populateAdminForm(uid);
+                }
+            });
+
+            // --- NOVO: Admin: Gerir Links ---
+            document.getElementById('form-admin-link').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const form = e.target;
+                const nome = form.nome.value;
+                const url = form.url.value;
+                const id = form.id.value; // (Para edição futura)
+                
+                const btn = form.querySelector('button[type="submit"]');
+                btn.disabled = true;
+                btn.textContent = "A Salvar...";
+                
+                try {
+                    const linksCollection = getLinksCollectionRef();
+                    const linkData = { nome, url }; // (Add 'ordem' later)
+
+                    if (id) {
+                        // Lógica de Update
+                        await updateDoc(doc(linksCollection, id), linkData);
+                    } else {
+                        // Lógica de Create
+                        await addDoc(linksCollection, linkData);
+                    }
+                    showNotification("Link salvo com sucesso!", "success");
+                    form.reset();
+                    form.id.value = '';
+                } catch (error) {
+                    console.error("Erro ao salvar link:", error);
+                    showNotification("Erro ao salvar link.", "error");
+                } finally {
+                    btn.disabled = false;
+                    btn.textContent = "Salvar Link";
+                }
+            });
+
+            document.getElementById('btn-clear-admin-link').addEventListener('click', () => {
+                document.getElementById('form-admin-link').reset();
+                document.getElementById('admin-link-id').value = '';
+            });
+
+            // NOVO: Listener para deletar links (delegação)
+            document.getElementById('lista-links-admin').addEventListener('click', async (e) => {
+                const deleteButton = e.target.closest('.btn-delete-link');
+                if (deleteButton) {
+                    const id = deleteButton.dataset.id;
+                    // (Sem confirmação, conforme diretriz de não usar confirm())
+                    try {
+                        await deleteDoc(doc(getLinksCollectionRef(), id));
+                        showNotification("Link apagado com sucesso.", "success");
+                        // A lista irá atualizar-se automaticamente via onSnapshot
+                    } catch (error) {
+                        console.error("Erro ao apagar link:", error);
+                        showNotification("Erro ao apagar link.", "error");
+                    }
+                }
+            });
+        }
+        
+        // --- NOVAS FUNÇÕES DE PESQUISA ---
+
+        async function searchProducts(term) {
+            const resultsContainer = document.getElementById('pedido-search-results');
+            if (term.length < 3) return;
+
+            resultsContainer.innerHTML = '<div class="p-2 text-sm text-gray-500">A pesquisar...</div>';
+            
+            const lowerTerm = term.toLowerCase();
+            const produtosRef = getProdutosCollectionRef();
+            
+            // Query: Pesquisa pelo campo 'searchKey' (que guardámos em minúsculas)
+            // 'startsWith' (começa com)
+            const q = query(produtosRef, 
+                where("searchKey", ">=", lowerTerm), 
+                where("searchKey", "<=", lowerTerm + '\uf8ff'), 
+                limit(10) // Limita a 10 resultados
+            );
+
+            try {
+                // ***** AQUI ESTÁ A CORREÇÃO *****
+                const querySnapshot = await getDocs(q); // CORREÇÃO: Usar getDocs (plural) para executar uma query
+                state.produtosBuscados = [];
+                querySnapshot.forEach((doc) => {
+                    state.produtosBuscados.push({ id: doc.id, ...doc.data() });
+                });
+                renderSearchResults();
+            } catch (error) {
+                console.error("Erro ao pesquisar produtos:", error);
+                resultsContainer.innerHTML = '<div class="p-2 text-sm text-red-500">Erro ao pesquisar.</div>';
+            }
+        }
+
+        function renderSearchResults() {
+            const resultsContainer = document.getElementById('pedido-search-results');
+            resultsContainer.innerHTML = ''; // Limpa anterior
+
+            if (state.produtosBuscados.length === 0) {
+                resultsContainer.innerHTML = '<div class="p-2 text-sm text-gray-500">Nenhum produto encontrado.</div>';
+                return;
+            }
+
+            const ul = document.createElement('ul');
+            ul.className = "divide-y divide-gray-200";
+            
+            state.produtosBuscados.forEach(produto => {
+                const li = document.createElement('li');
+                li.className = "p-3 hover:bg-gray-100 cursor-pointer";
+                li.innerHTML = `
+                    <p class="text-sm font-medium text-gray-900">${produto.variacao}</p>
+                    <p class="text-xs text-gray-500">${produto.produtoNome} (Cód: ${produto.produtoCod})</p>
+                    <p class="text-xs text-gray-500">Grupo: ${produto.grupoCompras} | Status: ${produto.status}</p>
+                `;
+                // Adiciona o evento de clique para autopreencher
+                li.addEventListener('click', () => {
+                    selectProduct(produto);
+                });
+                ul.appendChild(li);
+            });
+            resultsContainer.appendChild(ul);
+        }
+
+        function selectProduct(produto) {
+            const form = document.getElementById('form-pedido');
+            
+            // Preenche o formulário
+            form.grupoDeCompra.value = produto.grupoCompras || '';
+            form.codigoProduto.value = produto.produtoCod || '';
+            form.nomeProduto.value = produto.produtoNome || '';
+            form.variacao.value = produto.variacao || '';
+            
+            // Lógica bônus: Se for do CD, muda a modalidade
+            if (produto.aquisicao === 'Centro de Distribuição') {
+                form.modalidade.value = 'Requisição CD';
+                showNotification("Produto do Centro de Distribuição. Modalidade alterada para 'Requisição CD'.", "info");
+            }
+            
+            // Limpa a pesquisa
+            document.getElementById('pedido-search-produto').value = '';
+            document.getElementById('pedido-search-results').innerHTML = '';
+            state.produtosBuscados = [];
+        }
+
+        // --- UTILITÁRIOS ---
+        
+        function showNotification(message, type = "info") {
+            const container = document.getElementById('notification-container');
+            if (!container) return;
+            const id = `notif-${Date.now()}`;
+            
+            let bgColor, textColor, icon;
+            if (type === "success") {
+                bgColor = "bg-green-100";
+                textColor = "text-green-800";
+                icon = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" /></svg>`;
+            } else if (type === "error") {
+                bgColor = "bg-red-100";
+                textColor = "text-red-800";
+                icon = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" d="m9.75 9.75 4.5 4.5m0-4.5-4.5 4.5M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" /></svg>`;
+            } else {
+                bgColor = "bg-blue-100";
+                textColor = "text-blue-800";
+                icon = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" d="m11.25 11.25.041-.02a.75.75 0 0 1 1.063.852l-.708 2.836a.75.75 0 0 0 1.063.853l.041-.021M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9-3.75h.008v.008H12V8.25Z" /></svg>`;
+            }
+
+            const notif = document.createElement('div');
+            notif.id = id;
+            notif.className = `p-4 mb-4 rounded-md shadow-lg ${bgColor} ${textColor} flex items-center space-x-3 transition-all duration-300`;
+            notif.innerHTML = `
+                <span>${icon}</span>
+                <span class="flex-1">${message}</span>
+                <button onclick="document.getElementById('${id}').remove()" class="ml-auto -mx-1.5 -my-1.5 p-1.5 rounded-lg hover:bg-opacity-50 hover:bg-current">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" /></svg>
+                </button>
+            `;
+            
+            container.appendChild(notif);
+
+            setTimeout(() => {
+                notif.remove();
+            }, 7000); // Remove após 7 segundos (mais tempo para ler o erro)
+        }
+
+        // --- INICIALIZAÇÃO DA APLICAÇÃO ---
+        // Aguarda o carregamento do DOM para anexar os listeners
+        document.addEventListener('DOMContentLoaded', () => {
+            // Anexa todos os listeners globais
+            attachGlobalListeners();
+        });
+        
+        // Expor funções globais necessárias (ex: para navegação nos links)
+        window.showPage = showPage;
+        window.openPedidoModal = openPedidoModal;
+
+    </script>
+</head>
+<body class="h-full">
+
+    <!-- Notificações (Toasts) -->
+    <div id="notification-container" class="fixed top-4 right-4 z-50 w-full max-w-sm">
+        <!-- Notificações aparecerão aqui -->
+    </div>
+    
+    <!-- 1. TELA DE LOGIN -->
+    <div id="login-page" class="flex min-h-full flex-col justify-center px-6 py-12 lg:px-8">
+        <div class="sm:mx-auto sm:w-full sm:max-w-sm">
+            <!--  -->
+            <h2 class="mt-10 text-center text-3xl font-bold leading-9 tracking-tight text-fiesc-blue">
+                SISGA VIM/FOZ
+            </h2>
+            <h3 class="text-center text-lg text-gray-700">Sistema de Gestão de Aquisições</h3>
+        </div>
+
+        <div class="mt-10 sm:mx-auto sm:w-full sm:max-w-sm">
+            <form id="login-form" class="space-y-6">
+                <div>
+                    <label for="email" class="block text-sm font-medium leading-6 text-gray-900">Email</label>
+                    <div class="mt-2">
+                        <input id="email" name="email" type="email" autocomplete="email" required class="block w-full rounded-md border-0 py-1.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-fiesc-blue sm:text-sm sm:leading-6 p-2 bg-gray-50">
+                    </div>
+                </div>
+
+                <div>
+                    <label for="password" class="block text-sm font-medium leading-6 text-gray-900">Senha</label>
+                    <div class="mt-2">
+                        <input id="password" name="password" type="password" autocomplete="current-password" required class="block w-full rounded-md border-0 py-1.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-fiesc-blue sm:text-sm sm:leading-6 p-2 bg-gray-50">
+                    </div>
+                </div>
+
+                <div>
+                    <button type="submit" class="flex w-full justify-center rounded-md bg-fiesc-blue px-3 py-1.5 text-sm font-semibold leading-6 text-white shadow-sm hover:bg-fiesc-blue-light focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-fiesc-blue disabled:opacity-50">Entrar</button>
+                </div>
+            </form>
+            <p class="mt-4 text-center text-sm text-gray-500">
+                Atenção: Para criar utilizadores, fale com o Administrador.
+            </p>
+        </div>
+    </div>
+
+    <!-- 2. APLICAÇÃO PRINCIPAL (Escondida por padrão) -->
+    <div id="app-page" class="hidden h-full">
+        <!-- Navegação Lateral -->
+        <div class="fixed inset-y-0 z-30 flex w-64 flex-col bg-fiesc-blue">
+            <div class="flex flex-shrink-0 items-center px-4 h-16 border-b border-fiesc-blue-light">
+                <h2 class="text-xl font-bold text-white">SISGA VIM/FOZ</h2>
+            </div>
+            
+            <nav class="flex flex-1 flex-col overflow-y-auto">
+                <ul role="list" class="flex flex-1 flex-col p-4 space-y-2">
+                    <!-- Links de Navegação -->
+                    <li>
+                        <a href="#" data-page="dashboard" class="nav-link group flex items-center gap-x-3 rounded-md p-2 text-sm font-semibold leading-6">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6"><path stroke-linecap="round" stroke-linejoin="round" d="m2.25 12 8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25" /></svg>
+                            Dashboard
+                        </a>
+                    </li>
+                    <li>
+                        <a href="#" data-page="solicitacoes" class="nav-link group flex items-center gap-x-3 rounded-md p-2 text-sm font-semibold leading-6">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 0 1 0 3.75H5.625a1.875 1.875 0 0 1 0-3.75Z" /></svg>
+                            Solicitações
+                        </a>
+                    </li>
+                    <!-- REMOVIDO: Link da Base de Conhecimento -->
+                    <li id="nav-admin" class="hidden"> <!-- Só visível para Admin -->
+                        <a href="#" data-page="admin" class="nav-link group flex items-center gap-x-3 rounded-md p-2 text-sm font-semibold leading-6">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6"><path stroke-linecap="round" stroke-linejoin="round" d="M10.5 6h9.75M10.5 6a1.5 1.5 0 1 1-3 0m3 0a1.5 1.5 0 1 0-3 0M3.75 6H7.5m3 12h9.75m-9.75 0a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m-3.75 0H7.5m9-6h3.75m-3.75 0a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m-9.75 0h9.75" /></svg>
+                            Administração
+                        </a>
+                    </li>
+                    
+                    <!-- NOVO: Divisor e local para links dinâmicos -->
+                    <div id="dynamic-links-placeholder" class="mt-4 pt-4 border-t border-fiesc-blue-light hidden">
+                        <!-- Links externos serão injetados aqui pelo JS -->
+                    </div>
+
+                    <!-- Perfil do Utilizador e Logout -->
+                    <li class="mt-auto">
+                        <div class="p-2 space-y-2 border-t border-fiesc-blue-light">
+                            <div class="text-white">
+                                <div id="user-email-nav" class="font-semibold truncate" title="Nome do Utilizador">Utilizador...</div>
+                                <div id="user-profile-nav" class="text-xs text-blue-200">Perfil...</div>
+                            </div>
+                            <button id="btn-logout" class="group flex w-full items-center gap-x-3 rounded-md p-2 text-sm font-semibold leading-6 text-blue-100 hover:bg-fiesc-blue-light hover:text-white">
+                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0 0 13.5 3h-6a2.25 2.25 0 0 0-2.25 2.25v13.5A2.25 2.25 0 0 0 7.5 21h6a2.25 2.25 0 0 0 2.25-2.25V15M12 9l-3 3m0 0 3 3m-3-3h12.75" /></svg>
+                                Sair
+                            </button>
+                        </div>
+                    </li>
+                </ul>
+            </nav>
+        </div>
+
+        <!-- Conteúdo Principal -->
+        <div class="pl-64">
+            <main class="py-10">
+                <div class="px-4 sm:px-6 lg:px-8">
+                    
+                    <!-- ===== PÁGINA: DASHBOARD ===== -->
+                    <div id="dashboard" class="page-content">
+                        <!-- Cabeçalho -->
+                        <div class="sm:flex sm:items-center sm:justify-between">
+                            <h1 class="text-2xl font-bold leading-7 text-gray-900">Dashboard</h1>
+                            <button id="btn-novo-pedido" type="button" class="mt-4 sm:mt-0 block rounded-md bg-fiesc-blue px-3 py-2 text-center text-sm font-semibold text-white shadow-sm hover:bg-fiesc-blue-light focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-fiesc-blue">
+                                + Nova Solicitação
+                            </button>
+                        </div>
+                        
+                        <!-- Cards de Status (KPIs) -->
+                        <div class="mt-8 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
+                            <div class="overflow-hidden rounded-lg bg-white p-5 shadow">
+                                <dt class="truncate text-sm font-medium text-gray-500">Total de Pedidos</dt>
+                                <dd id="stat-total" class="mt-1 text-3xl font-semibold tracking-tight text-gray-900">0</dd>
+                            </div>
+                            <div class="overflow-hidden rounded-lg bg-white p-5 shadow">
+                                <dt class="truncate text-sm font-medium text-gray-500">A Abrir RN</dt>
+                                <dd id="stat-abrir-rn" class="mt-1 text-3xl font-semibold tracking-tight text-blue-600">0</dd>
+                            </div>
+                            <div class="overflow-hidden rounded-lg bg-white p-5 shadow">
+                                <dt class="truncate text-sm font-medium text-gray-500">Aguardando Entrega</dt>
+                                <dd id="stat-aguardando-entrega" class="mt-1 text-3xl font-semibold tracking-tight text-orange-600">0</dd>
+                            </div>
+                            <div class="overflow-hidden rounded-lg bg-white p-5 shadow">
+                                <dt class="truncate text-sm font-medium text-gray-500">Pendências (Ex: Sem NF)</dt>
+                                <dd id="stat-pendencia-nf" class="mt-1 text-3xl font-semibold tracking-tight text-red-600">0</dd>
+                            </div>
+                        </div>
+                        
+                        <!-- Tabela de Pedidos Recentes -->
+                        <div class="mt-8">
+                            <h2 class="text-xl font-semibold text-gray-900">Pedidos Recentes</h2>
+                            <div class="mt-4 flow-root">
+                                <div class="-mx-4 -my-2 overflow-x-auto sm:-mx-6 lg:-mx-8">
+                                    <div class="inline-block min-w-full py-2 align-middle sm:px-6 lg:px-8">
+                                        <div class="overflow-hidden shadow ring-1 ring-black ring-opacity-5 sm:rounded-lg">
+                                            <table id="tabela-pedidos-dashboard" class="min-w-full divide-y divide-gray-300">
+                                                <thead class="bg-gray-50">
+                                                    <tr>
+                                                        <th scope="col" class="py-3.5 pl-4 pr-3 text-left text-sm font-semibold text-gray-900 sm:pl-6">RN / OC</th>
+                                                        <th scope="col" class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">Unidade / Demandante</th>
+                                                        <th scope="col" class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">Produto</th>
+                                                        <th scope="col" class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">Modalidade</th>
+                                                        <th scope="col" class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">Data Sol.</th>
+                                                        <th scope="col" class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">Valor</th>
+                                                        <th scope="col" class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">Status</th>
+                                                        <th scope="col" class="relative py-3.5 pl-3 pr-4 sm:pr-6">
+                                                            <span class="sr-only">Editar</span>
+                                                        </th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody class="divide-y divide-gray-200">
+                                                    <!-- Linhas de pedidos recentes serão inseridas aqui pelo JS -->
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- ===== PÁGINA: SOLICITAÇÕES ===== -->
+                    <div id="solicitacoes" class="page-content hidden">
+                        <div class="sm:flex sm:items-center sm:justify-between">
+                            <h1 class="text-2xl font-bold leading-7 text-gray-900">Gerir Solicitações</h1>
+                            <button onclick="openPedidoModal()" type="button" class="mt-4 sm:mt-0 block rounded-md bg-fiesc-blue px-3 py-2 text-center text-sm font-semibold text-white shadow-sm hover:bg-fiesc-blue-light focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-fiesc-blue">
+                                + Nova Solicitação
+                            </button>
+                        </div>
+                        
+                        <!-- Filtros da Tabela -->
+                        <div class="mt-8">
+                            <!-- TODO: Adicionar filtros por Unidade, Status, etc. -->
+                        </div>
+
+                        <!-- Tabela Completa de Pedidos -->
+                        <div class="mt-4 flow-root">
+                            <div class="-mx-4 -my-2 overflow-x-auto sm:-mx-6 lg:-mx-8">
+                                <div class="inline-block min-w-full py-2 align-middle sm:px-6 lg:px-8">
+                                    <div class="overflow-hidden shadow ring-1 ring-black ring-opacity-5 sm:rounded-lg">
+                                        <table id="tabela-pedidos-solicitacoes" class="min-w-full divide-y divide-gray-300">
+                                            <thead class="bg-gray-50">
+                                                <tr>
+                                                    <th scope="col" class="py-3.5 pl-4 pr-3 text-left text-sm font-semibold text-gray-900 sm:pl-6">RN / OC</th>
+                                                    <th scope="col" class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">Unidade / Demandante</th>
+                                                    <th scope="col" class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">Produto</th>
+                                                    <th scope="col" class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">Modalidade</th>
+                                                    <th scope="col" class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">Data Sol.</th>
+                                                    <th scope="col" class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">Valor (R$)</th>
+                                                    <th scope="col" class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">Status</th>
+                                                    <th scope="col" class="relative py-3.5 pl-3 pr-4 sm:pr-6">
+                                                        <span class="sr-only">Editar</span>
+                                                    </th>
+                                                </tr>
+                                            </thead>
+                                            <tbody class="divide-y divide-gray-200">
+                                                <!-- Linhas de pedidos serão inseridas aqui pelo JS -->
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- ===== PÁGINA: BASE DE CONHECIMENTO (REMOVIDA) ===== -->
+                    
+                    <!-- ===== PÁGINA: ADMINISTRAÇÃO ===== -->
+                    <div id="admin" class="page-content hidden">
+                        <h1 class="text-2xl font-bold leading-7 text-gray-900">Painel de Administração</h1>
+                        
+                        <!-- ATUALIZAÇÃO: Grid de 2 colunas para os formulários -->
+                        <div class="mt-8 grid grid-cols-1 gap-8 lg:grid-cols-2">
+                            <!-- Coluna 1: Gerir Perfil -->
+                            <div class="bg-white p-6 rounded-lg shadow">
+                                <h2 class="text-lg font-semibold text-gray-900">Gerir Perfil de Utilizador</h2>
+                                <p class="mt-1 text-sm text-gray-600">Instrução: Clique em 'Editar' na tabela ou insira um novo UID (do Firebase Auth) para criar um perfil.</p>
+                                <form id="form-admin-user" class="mt-6 space-y-4">
+                                    <div>
+                                        <label for="admin-user-uid" class="block text-sm font-medium text-gray-700">UID do Utilizador (do Firebase Auth)</label>
+                                        <input type="text" id="admin-user-uid" name="uid" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-fiesc-blue focus:ring-fiesc-blue p-2 bg-gray-50 read-only:bg-gray-200 read-only:cursor-not-allowed">
+                                    </div>
+                                    <div>
+                                        <label for="admin-user-email" class="block text-sm font-medium text-gray-700">Email</label>
+                                        <input type="email" id="admin-user-email" name="email" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-fiesc-blue focus:ring-fiesc-blue p-2 bg-gray-50">
+                                    </div>
+                                    <div>
+                                        <label for="admin-user-nome" class="block text-sm font-medium text-gray-700">Nome Completo</label>
+                                        <input type="text" id="admin-user-nome" name="nome" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-fiesc-blue focus:ring-fiesc-blue p-2 bg-gray-50">
+                                    </div>
+                                    <div>
+                                        <label for="admin-user-perfil" class="block text-sm font-medium text-gray-700">Perfil</label>
+                                        <select id="admin-user-perfil" name="perfil" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-fiesc-blue focus:ring-fiesc-blue p-2 bg-gray-50">
+                                            <option value="Solicitante">Solicitante</option>
+                                            <option value="Aquisicoes">Aquisições</option>
+                                            <option value="Admin">Admin</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label for="admin-user-unidade" class="block text-sm font-medium text-gray-700">Unidade</label>
+                                        <select id="admin-user-unidade" name="unidade" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-fiesc-blue focus:ring-fiesc-blue p-2 bg-gray-50">
+                                            <!-- Opções de unidade inseridas pelo JS -->
+                                        </select>
+                                    </div>
+                                    <div class="text-right flex justify-end space-x-2">
+                                        <button type="button" id="btn-clear-admin-form" class="inline-flex justify-center rounded-md bg-white px-4 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50">
+                                            Limpar (Novo)
+                                        </button>
+                                        <button type="submit" class="inline-flex justify-center rounded-md bg-fiesc-blue px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-fiesc-blue-light disabled:opacity-50">
+                                            Salvar Perfil
+                                        </button>
+                                    </div>
+                                </form>
+                            </div>
+                            
+                            <!-- Coluna 2: Gerir Links (Novo) -->
+                            <div class="bg-white p-6 rounded-lg shadow">
+                                <h2 class="text-lg font-semibold text-gray-900">Gerir Links (Novas Guias)</h2>
+                                <p class="mt-1 text-sm text-gray-600">Crie links que aparecerão no menu lateral para todos os utilizadores.</p>
+                                <form id="form-admin-link" class="mt-6 space-y-4">
+                                    <input type="hidden" id="admin-link-id" name="id"> <!-- Para edição futura -->
+                                    <div>
+                                        <label for="admin-link-nome" class="block text-sm font-medium text-gray-700">Nome da Guia</label>
+                                        <input type="text" id="admin-link-nome" name="nome" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 bg-gray-50 focus:border-fiesc-blue focus:ring-fiesc-blue">
+                                    </div>
+                                    <div>
+                                        <label for="admin-link-url" class="block text-sm font-medium text-gray-700">URL (link completo)</label>
+                                        <input type="url" id="admin-link-url" name="url" placeholder="https://..." required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 bg-gray-50 focus:border-fiesc-blue focus:ring-fiesc-blue">
+                                    </div>
+                                    <div class="text-right flex justify-end space-x-2">
+                                        <button type="button" id="btn-clear-admin-link" class="inline-flex justify-center rounded-md bg-white px-4 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50">
+                                            Limpar
+                                        </button>
+                                        <button type="submit" class="inline-flex justify-center rounded-md bg-fiesc-blue px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-fiesc-blue-light disabled:opacity-50">
+                                            Salvar Link
+                                        </button>
+                                    </div>
+                                </form>
+                                
+                                <!-- Lista de Links Atuais -->
+                                <h3 class="text-lg font-semibold text-gray-900 mt-6">Links Atuais</h3>
+                                <div id="lista-links-admin" class="mt-4 space-y-2 max-h-48 overflow-y-auto">
+                                    <!-- Links serão injetados aqui pelo JS -->
+                                    <p class="text-sm text-gray-500">A carregar links...</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- ATUALIZAÇÃO: Tabela de usuários movida para baixo, full-width -->
+                        <div class="mt-8 bg-white p-6 rounded-lg shadow">
+                            <h2 class="text-lg font-semibold text-gray-900">Utilizadores Registados</h2>
+                            <div class="mt-4 flow-root">
+                                <div class="overflow-x-auto">
+                                    <table class="min-w-full divide-y divide-gray-300">
+                                        <thead class="bg-gray-50">
+                                            <tr>
+                                                <!-- Cabeçalhos serão inseridos pelo JS (renderAdminPage) -->
+                                            </tr>
+                                        </thead>
+                                        <tbody id="tabela-usuarios" class="divide-y divide-gray-200">
+                                            <!-- Conteúdo inserido pelo JS -->
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                
+                </div>
+            </main>
+        </div>
+    </div>
+    
+    <!-- 3. MODAL (Nova Solicitação / Editar Solicitação) -->
+    <div id="modal-pedido" class="relative z-40 hidden" aria-labelledby="modal-title" role="dialog" aria-modal="true">
+        <!-- Overlay -->
+        <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"></div>
+
+        <div class="fixed inset-0 z-10 w-screen overflow-y-auto">
+            <div class="flex min-h-full items-center justify-center p-4 text-center sm:p-0">
+                
+                <div class="relative transform overflow-hidden rounded-lg bg-white text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-4xl"> <!-- Aumentei o modal para max-w-4xl -->
+                    <form id="form-pedido" data-pedido-id="">
+                        <div class="bg-white px-4 pb-4 pt-5 sm:p-6 sm:pb-4">
+                            <div class="sm:flex sm:items-start">
+                                <div class="mt-3 text-center sm:ml-4 sm:mt-0 sm:text-left w-full">
+                                    <h3 class="text-lg font-semibold leading-6 text-gray-900" id="modal-pedido-title">Nova Solicitação</h3>
+                                    <div class="mt-4 grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-6">
+                                        
+                                        <!-- Campos do Solicitante -->
+                                        <div class="sm:col-span-6">
+                                            <h4 class="text-base font-medium text-gray-800">Detalhes da Solicitação</h4>
+                                        </div>
+                                        
+                                        <!-- NOVO: Pesquisa de Produto -->
+                                        <div class="sm:col-span-6">
+                                            <label for="pedido-search-produto" class="block text-sm font-medium text-gray-700">Pesquisar Produto (Nome/Variação)</label>
+                                            <input type="text" id="pedido-search-produto" name="searchProduto" autocomplete="off" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-fiesc-blue focus:ring-fiesc-blue p-2 bg-gray-50" placeholder="Digite 3+ letras para pesquisar... (ex: Abaixador)">
+                                            <!-- Resultados da Pesquisa -->
+                                            <div id="pedido-search-results" class="mt-1 w-full rounded-md border border-gray-300 bg-white shadow-lg max-h-60 overflow-y-auto z-50">
+                                                <!-- Resultados da pesquisa aparecem aqui -->
+                                            </div>
+                                        </div>
+                                        
+                                        <div class="sm:col-span-3">
+                                            <label for="pedido-unidade" class="block text-sm font-medium text-gray-700">Unidade</label>
+                                            <select id="pedido-unidade" name="unidade" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-fiesc-blue focus:ring-fiesc-blue p-2 bg-gray-50"></select>
+                                        </div>
+                                        
+                                        <div class="sm:col-span-3">
+                                            <label for="pedido-nomeDemandante" class="block text-sm font-medium text-gray-700">Nome do Demandante</label>
+                                            <input type="text" id="pedido-nomeDemandante" name="nomeDemandante" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-fiesc-blue focus:ring-fiesc-blue p-2 bg-gray-50">
+                                        </div>
+                                        
+                                        <!-- ATUALIZAÇÃO: CR/Projeto dividido em dois campos -->
+                                        <div class="sm:col-span-1">
+                                            <label for="pedido-cr" class="block text-sm font-medium text-gray-700">CR</label>
+                                            <input type="text" id="pedido-cr" name="cr" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-fiesc-blue focus:ring-fiesc-blue p-2 bg-gray-50">
+                                        </div>
+                                        <div class="sm:col-span-1">
+                                            <label for="pedido-projeto" class="block text-sm font-medium text-gray-700">Projeto</label>
+                                            <input type="text" id="pedido-projeto" name="projeto" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-fiesc-blue focus:ring-fiesc-blue p-2 bg-gray-50">
+                                        </div>
+                                        <!-- FIM DA ATUALIZAÇÃO -->
+                                        
+                                        <!-- ATUALIZAÇÃO: Adicionado ID para controle de visibilidade -->
+                                        <div class="sm:col-span-2" id="campo-modalidade-container">
+                                            <label for="pedido-modalidade" class="block text-sm font-medium text-gray-700">Modalidade</label>
+                                            <select id="pedido-modalidade" name="modalidade" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-fiesc-blue focus:ring-fiesc-blue p-2 bg-gray-50">
+                                                <option value="Produto">Produto</option>
+                                                <option value="Serviço">Serviço</option>
+                                                <option value="Contrato">Contrato</option>
+                                                <option value="Compra Regional">Compra Regional</option>
+                                                <option value="Requisição CD">Requisição CD</option>
+                                                <option value="Fundo Rotativo">Fundo Rotativo</option>
+                                            </select>
+                                        </div>
+                                        
+                                        <div class="sm:col-span-2">
+                                            <label for="pedido-grupoDeCompra" class="block text-sm font-medium text-gray-700">Grupo de Compra</label>
+                                            <select id="pedido-grupoDeCompra" name="grupoDeCompra" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-fiesc-blue focus:ring-fiesc-blue p-2 bg-gray-50">
+                                                <!-- Opções de grupo inseridas pelo JS -->
+                                            </select>
+                                        </div>
+
+                                        <div class="sm:col-span-2">
+                                            <label for="pedido-codigoProduto" class="block text-sm font-medium text-gray-700">Código do Produto</label>
+                                            <input type="text" id="pedido-codigoProduto" name="codigoProduto" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-fiesc-blue focus:ring-fiesc-blue p-2 bg-gray-50">
+                                        </div>
+                                        
+                                        <div class="sm:col-span-4">
+                                            <label for="pedido-nomeProduto" class="block text-sm font-medium text-gray-700">Nome do Produto/Serviço</label>
+                                            <input type="text" id="pedido-nomeProduto" name="nomeProduto" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-fiesc-blue focus:ring-fiesc-blue p-2 bg-gray-50">
+                                        </div>
+                                        
+                                        <div class="sm:col-span-2">
+                                            <label for="pedido-variacao" class="block text-sm font-medium text-gray-700">Variação (Cor, Tamanho, etc.)</label>
+                                            <input type="text" id="pedido-variacao" name="variacao" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-fiesc-blue focus:ring-fiesc-blue p-2 bg-gray-50">
+                                        </div>
+
+                                        <div>
+                                            <label for="pedido-quantidade" class="block text-sm font-medium text-gray-700">Quantidade</label>
+                                            <input type="number" id="pedido-quantidade" name="quantidade" value="1" min="1" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-fiesc-blue focus:ring-fiesc-blue p-2 bg-gray-50">
+                                        </div>
+
+                                        <div>
+                                            <label for="pedido-valorUnitario" class="block text-sm font-medium text-gray-700">Valor Unitário (R$)</label>
+                                            <input type="number" step="0.01" id="pedido-valorUnitario" name="valorUnitario" value="0.00" min="0" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-fiesc-blue focus:ring-fiesc-blue p-2 bg-gray-50">
+                                        </div>
+
+                                        <div>
+                                            <label for="pedido-valorTotal" class="block text-sm font-medium text-gray-700">Valor Total (R$)</label>
+                                            <input type="number" step="0.01" id="pedido-valorTotal" name="valorTotal" readonly class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 bg-gray-200 cursor-not-allowed"> <!-- Desabilitado -->
+                                        </div>
+
+                                        <div class="sm:col-span-6">
+                                            <label for="pedido-descricao" class="block text-sm font-medium text-gray-700">Observações / Complementos</label>
+                                            <textarea id="pedido-descricao" name="descricao" rows="2" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-fiesc-blue focus:ring-fiesc-blue p-2 bg-gray-50"></textarea>
+                                        </div>
+                                        
+                                        <div class="sm:col-span-6">
+                                            <label for="pedido-fileOrcamento" class="block text-sm font-medium text-gray-700">Anexar Orçamento</label>
+                                            <input type="file" id="pedido-fileOrcamento" name="fileOrcamento" class="mt-1 block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-fiesc-blue file:text-white hover:file:bg-fiesc-blue-light">
+                                            <a id="link-orcamento" href="#" target="_blank" class="hidden mt-2 text-sm text-fiesc-blue hover:underline">Ver orçamento anexado</a>
+                                        </div>
+                                        
+                                        <!-- Campos de Aquisições -->
+                                        <div id="campos-aquisicoes" class="sm:col-span-6 mt-6 pt-6 border-t border-gray-200 hidden">
+                                            <h4 class="text-base font-medium text-gray-800">Gestão (Aquisições)</h4>
+                                            
+                                            <div class="mt-4 grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-6">
+                                                <div class="sm:col-span-2">
+                                                    <label for="pedido-status" class="block text-sm font-medium text-gray-700">Status do Pedido</label>
+                                                    <select id="pedido-status" name="status" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-fiesc-blue focus:ring-fiesc-blue p-2 bg-gray-50"></select>
+                                                </div>
+                                                <div class="sm:col-span-2">
+                                                    <label for="pedido-dataPrevisao" class="block text-sm font-medium text-gray-700">Previsão de Entrega</label>
+                                                    <input type="date" id="pedido-dataPrevisao" name="dataPrevisao" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-fiesc-blue focus:ring-fiesc-blue p-2 bg-gray-50">
+                                                </div>
+                                                <div class="sm:col-span-1">
+                                                    <label for="pedido-numRN" class="block text-sm font-medium text-gray-700">Nº da RN</label>
+                                                    <input type="text" id="pedido-numRN" name="numRN" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-fiesc-blue focus:ring-fiesc-blue p-2 bg-gray-50">
+                                                </div>
+                                                <div class="sm:col-span-1">
+                                                    <label for="pedido-numOC" class="block text-sm font-medium text-gray-700">Nº da OC / Chave</V>
+                                                    <input type="text" id="pedido-numOC" name="numOC" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-fiesc-blue focus:ring-fiesc-blue p-2 bg-gray-50">
+                                                </div>
+                                                <div class="sm:col-span-6">
+                                                    <label for="pedido-fileNotaFiscal" class="block text-sm font-medium text-gray-700">Anexar Nota Fiscal</label>
+                                                    <input type="file" id="pedido-fileNotaFiscal" name="fileNotaFiscal" class="mt-1 block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-fiesc-blue file:text-white hover:file:bg-fiesc-blue-light">
+                                                    <a id="link-nf" href="#" target="_blank" class="hidden mt-2 text-sm text-fiesc-blue hover:underline">Ver NF anexada</a>
+                                                </div>
+                                            </div>
+        
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Botões do Modal -->
+                        <div class="bg-gray-50 px-4 py-3 sm:flex sm:flex-row-reverse sm:px-6">
+                            <button type="submit" id="btn-salvar-pedido" class="inline-flex w-full justify-center rounded-md bg-fiesc-blue px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-fiesc-blue-light sm:ml-3 sm:w-auto disabled:opacity-50">
+                                Salvar Pedido
+                            </button>
+                            <button type="button" id="btn-fechar-modal-pedido" class="mt-3 inline-flex w-full justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 sm:mt-0 sm:w-auto">
+                                Cancelar
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+</body>
+</html>
