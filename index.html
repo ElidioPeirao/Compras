@@ -288,7 +288,11 @@
             let pedidosFiltrados = state.pedidos;
             // Se for solicitante, filtra as estatísticas
             if (currentUserProfile.perfil === 'Solicitante') {
-                pedidosFiltrados = state.pedidos.filter(p => p.solicitanteId === currentUser.uid);
+                // CORREÇÃO: Um solicitante vê pedidos criados por ele OU onde ele é o demandante
+                pedidosFiltrados = state.pedidos.filter(p => 
+                    p.solicitanteId === currentUser.uid || 
+                    p.nomeDemandante === currentUserProfile.nome
+                );
             }
 
             pedidosFiltrados.forEach(p => {
@@ -442,25 +446,55 @@
         function renderNavLinks() {
             const placeholder = document.getElementById('dynamic-links-placeholder');
             placeholder.innerHTML = ''; // Limpa links antigos
-            
-            // Esconde o divisor se não houver links
-            if (state.linksExternos.length === 0) {
-                placeholder.classList.add('hidden');
-                return;
-            }
-            
-            placeholder.classList.remove('hidden');
+            let linksRendered = 0; // Contador para links visíveis
+            const perfil = currentUserProfile.perfil || "Solicitante";
             
             state.linksExternos.forEach(link => {
-                const li = document.createElement('li');
-                li.innerHTML = `
-                    <a href="${link.url}" target="_blank" rel="noopener noreferrer" class="nav-link group flex items-center gap-x-3 rounded-md p-2 text-sm font-semibold leading-6 text-blue-100 hover:bg-fiesc-blue-light hover:text-white">
-                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6"><path stroke-linecap="round" stroke-linejoin="round" d="M13.5 6H5.25A2.25 2.25 0 0 0 3 8.25v10.5A2.25 2.25 0 0 0 5.25 21h10.5A2.25 2.25 0 0 0 18 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" /></svg>
-                        ${link.nome}
-                    </a>
-                `;
-                placeholder.appendChild(li);
+                let canView = false;
+                const acesso = link.acesso; // Pode ser 'todos', 'solicitante', 'aquisicoes' (strings antigas) OU {solicitante: bool, aquisicoes: bool} (objeto novo)
+                let roles = [];
+
+                if (typeof acesso === 'object' && acesso !== null) {
+                    // Nova lógica de objeto
+                    if (acesso.solicitante) roles.push('Solicitante');
+                    if (acesso.aquisicoes) roles.push('Aquisicoes'); // 'Aquisicoes' e 'Admin' são agrupados
+                } else if (typeof acesso === 'string') {
+                    // Lógica antiga (fallback)
+                    if (acesso === 'todos') roles = ['Solicitante', 'Aquisicoes'];
+                    else if (acesso === 'solicitante') roles.push('Solicitante');
+                    else if (acesso === 'aquisicoes') roles.push('Aquisicoes');
+                } else if (!acesso) {
+                    // Padrão (undefined/null) - assume 'todos'
+                    roles = ['Solicitante', 'Aquisicoes'];
+                }
+
+                // Agora, a verificação
+                if (perfil === 'Solicitante' && roles.includes('Solicitante')) {
+                    canView = true;
+                }
+                if ((perfil === 'Aquisicoes' || perfil === 'Admin') && roles.includes('Aquisicoes')) {
+                    canView = true;
+                }
+
+                if (canView) {
+                    linksRendered++;
+                    const li = document.createElement('li');
+                    li.innerHTML = `
+                        <a href="${link.url}" target="_blank" rel="noopener noreferrer" class="nav-link group flex items-center gap-x-3 rounded-md p-2 text-sm font-semibold leading-6 text-blue-100 hover:bg-fiesc-blue-light hover:text-white">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6"><path stroke-linecap="round" stroke-linejoin="round" d="M13.5 6H5.25A2.25 2.25 0 0 0 3 8.25v10.5A2.25 2.25 0 0 0 5.25 21h10.5A2.25 2.25 0 0 0 18 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" /></svg>
+                            ${link.nome}
+                        </a>
+                    `;
+                    placeholder.appendChild(li);
+                }
             });
+
+            // Mostra/esconde o divisor baseado se algum link foi RENDERIZADO
+            if (linksRendered > 0) {
+                placeholder.classList.remove('hidden');
+            } else {
+                placeholder.classList.add('hidden');
+            }
         }
 
         // NOVO: Renderiza a lista de links no painel de admin
@@ -476,10 +510,36 @@
             state.linksExternos.forEach(link => {
                 const div = document.createElement('div');
                 div.className = "flex items-center justify-between p-2 bg-gray-50 rounded-md";
+
+                // Lógica de exibição de acesso
+                let acessoText = 'Nenhum';
+                const acesso = link.acesso;
+                let roles = [];
+
+                if (typeof acesso === 'object' && acesso !== null) {
+                    // Nova lógica
+                    if (acesso.solicitante) roles.push('Solicitante');
+                    if (acesso.aquisicoes) roles.push('Aquisições/Admin');
+                } else if (typeof acesso === 'string') {
+                    // Lógica antiga (fallback)
+                    if (acesso === 'todos') roles = ['Solicitante', 'Aquisições/Admin'];
+                    else if (acesso === 'solicitante') roles.push('Solicitante');
+                    else if (acesso === 'aquisicoes') roles.push('Aquisições/Admin');
+                } else if (!acesso) {
+                    // Padrão (undefined/null)
+                    roles = ['Solicitante', 'Aquisições/Admin'];
+                }
+                
+                if (roles.length > 0) acessoText = roles.join(', ');
+                else if (roles.length === 0) acessoText = 'Ninguém (Erro?)';
+
+
                 div.innerHTML = `
                     <div>
                         <p class="text-sm font-medium text-gray-900">${link.nome}</p>
                         <p class="text-xs text-gray-500 truncate" title="${link.url}">${link.url}</p>
+                        <!-- Mostra o nível de acesso -->
+                        <p class="text-xs text-blue-600 font-medium">Acesso: ${acessoText}</p>
                     </div>
                     <div>
                         <!-- <button type="button" data-id="${link.id}" class="btn-edit-link text-fiesc-blue hover:text-fiesc-blue-light p-1"> (Para edição futura)
@@ -706,14 +766,13 @@
             const perfil = currentUserProfile.perfil || "Solicitante";
             const camposAquisicoes = document.getElementById('campos-aquisicoes');
             
-            // ATUALIZAÇÃO: Gerencia visibilidade dos campos de Aquisição E Modalidade
-            const campoModalidade = document.getElementById('campo-modalidade-container');
+            // ATUALIZAÇÃO: Lógica de visibilidade simplificada.
+            // Os campos (Modalidade, Grupo) foram movidos para dentro de 'campos-aquisicoes',
+            // então basta controlar a visibilidade do container pai.
             if (perfil === 'Admin' || perfil === 'Aquisicoes') {
                 camposAquisicoes.classList.remove('hidden');
-                campoModalidade.classList.remove('hidden'); // Admin/Aquisicoes veem Modalidade
             } else { // Solicitante
                 camposAquisicoes.classList.add('hidden');
-                campoModalidade.classList.add('hidden'); // Solicitante NÃO vê Modalidade
             }
 
             if (pedidoId) {
@@ -731,8 +790,10 @@
                     form.cr.value = pedido.cr || ''; 
                     form.projeto.value = pedido.projeto || '';
 
+                    // ATUALIZAÇÃO: Estes campos agora estão em 'campos-aquisicoes'
                     form.modalidade.value = pedido.modalidade;
                     form.grupoDeCompra.value = pedido.grupoDeCompra || ''; 
+                    
                     form.codigoProduto.value = pedido.codigoProduto || ''; 
                     form.nomeProduto.value = pedido.nomeProduto || ''; 
                     form.variacao.value = pedido.variacao || ''; 
@@ -929,9 +990,7 @@
                     // ATUALIZAÇÃO: Campos separados
                     cr: form.cr.value,
                     projeto: form.projeto.value,
-
-                    modalidade: form.modalidade.value,
-                    grupoDeCompra: form.grupoDeCompra.value, 
+                    
                     codigoProduto: form.codigoProduto.value, 
                     nomeProduto: form.nomeProduto.value, 
                     variacao: form.variacao.value, 
@@ -939,7 +998,10 @@
                     valorUnitario: parseFloat(form.valorUnitario.value) || 0, 
                     valorTotal: parseFloat(form.valorTotal.value) || 0, // Agora é calculado
                     descricao: form.descricao.value, // Renomeado para "Observações"
-                    // Campos de Aquisições
+                    
+                    // Campos de Aquisições (agora inclui modalidade e grupo)
+                    modalidade: form.modalidade.value,
+                    grupoDeCompra: form.grupoDeCompra.value, 
                     numRN: form.numRN.value,
                     numOC: form.numOC.value,
                     dataPrevisao: form.dataPrevisao.value,
@@ -1021,6 +1083,11 @@
                 const form = e.target;
                 const nome = form.nome.value;
                 const url = form.url.value;
+                // ATUALIZAÇÃO: Captura dos checkboxes
+                const acesso = {
+                    solicitante: form['admin-link-acesso-solicitante'].checked,
+                    aquisicoes: form['admin-link-acesso-aquisicoes'].checked
+                };
                 const id = form.id.value; // (Para edição futura)
                 
                 const btn = form.querySelector('button[type="submit"]');
@@ -1029,7 +1096,7 @@
                 
                 try {
                     const linksCollection = getLinksCollectionRef();
-                    const linkData = { nome, url }; // (Add 'ordem' later)
+                    const linkData = { nome, url, acesso }; // Salva o objeto de acesso
 
                     if (id) {
                         // Lógica de Update
@@ -1041,6 +1108,9 @@
                     showNotification("Link salvo com sucesso!", "success");
                     form.reset();
                     form.id.value = '';
+                    // Limpa os checkboxes
+                    form['admin-link-acesso-solicitante'].checked = false;
+                    form['admin-link-acesso-aquisicoes'].checked = false;
                 } catch (error) {
                     console.error("Erro ao salvar link:", error);
                     showNotification("Erro ao salvar link.", "error");
@@ -1053,6 +1123,9 @@
             document.getElementById('btn-clear-admin-link').addEventListener('click', () => {
                 document.getElementById('form-admin-link').reset();
                 document.getElementById('admin-link-id').value = '';
+                // Limpa os checkboxes
+                document.getElementById('admin-link-acesso-solicitante').checked = false;
+                document.getElementById('admin-link-acesso-aquisicoes').checked = false;
             });
 
             // NOVO: Listener para deletar links (delegação)
@@ -1481,6 +1554,30 @@
                                         <label for="admin-link-url" class="block text-sm font-medium text-gray-700">URL (link completo)</label>
                                         <input type="url" id="admin-link-url" name="url" placeholder="https://..." required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 bg-gray-50 focus:border-fiesc-blue focus:ring-fiesc-blue">
                                     </div>
+                                    
+                                    <!-- ATUALIZAÇÃO: Substituído Select por Checkboxes -->
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700">Nível de Acesso</label>
+                                        <fieldset class="mt-2 space-y-2">
+                                            <div class="relative flex items-start">
+                                                <div class="flex h-6 items-center">
+                                                    <input id="admin-link-acesso-solicitante" name="admin-link-acesso-solicitante" type="checkbox" class="h-4 w-4 rounded border-gray-300 text-fiesc-blue focus:ring-fiesc-blue">
+                                                </div>
+                                                <div class="ml-3 text-sm leading-6">
+                                                    <label for="admin-link-acesso-solicitante" class="font-medium text-gray-900">Solicitante</label>
+                                                </div>
+                                            </div>
+                                            <div class="relative flex items-start">
+                                                <div class="flex h-6 items-center">
+                                                    <input id="admin-link-acesso-aquisicoes" name="admin-link-acesso-aquisicoes" type="checkbox" class="h-4 w-4 rounded border-gray-300 text-fiesc-blue focus:ring-fiesc-blue">
+                                                </div>
+                                                <div class="ml-3 text-sm leading-6">
+                                                    <label for="admin-link-acesso-aquisicoes" class="font-medium text-gray-900">Aquisições / Admin</label>
+                                                </div>
+                                            </div>
+                                        </fieldset>
+                                    </div>
+                                    
                                     <div class="text-right flex justify-end space-x-2">
                                         <button type="button" id="btn-clear-admin-link" class="inline-flex justify-center rounded-md bg-white px-4 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50">
                                             Limpar
@@ -1567,36 +1664,16 @@
                                         </div>
                                         
                                         <!-- ATUALIZAÇÃO: CR/Projeto dividido em dois campos -->
-                                        <div class="sm:col-span-1">
+                                        <div class="sm:col-span-2">
                                             <label for="pedido-cr" class="block text-sm font-medium text-gray-700">CR</label>
                                             <input type="text" id="pedido-cr" name="cr" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-fiesc-blue focus:ring-fiesc-blue p-2 bg-gray-50">
                                         </div>
-                                        <div class="sm:col-span-1">
+                                        <div class="sm:col-span-2">
                                             <label for="pedido-projeto" class="block text-sm font-medium text-gray-700">Projeto</label>
                                             <input type="text" id="pedido-projeto" name="projeto" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-fiesc-blue focus:ring-fiesc-blue p-2 bg-gray-50">
                                         </div>
                                         <!-- FIM DA ATUALIZAÇÃO -->
                                         
-                                        <!-- ATUALIZAÇÃO: Adicionado ID para controle de visibilidade -->
-                                        <div class="sm:col-span-2" id="campo-modalidade-container">
-                                            <label for="pedido-modalidade" class="block text-sm font-medium text-gray-700">Modalidade</label>
-                                            <select id="pedido-modalidade" name="modalidade" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-fiesc-blue focus:ring-fiesc-blue p-2 bg-gray-50">
-                                                <option value="Produto">Produto</option>
-                                                <option value="Serviço">Serviço</option>
-                                                <option value="Contrato">Contrato</option>
-                                                <option value="Compra Regional">Compra Regional</option>
-                                                <option value="Requisição CD">Requisição CD</option>
-                                                <option value="Fundo Rotativo">Fundo Rotativo</option>
-                                            </select>
-                                        </div>
-                                        
-                                        <div class="sm:col-span-2">
-                                            <label for="pedido-grupoDeCompra" class="block text-sm font-medium text-gray-700">Grupo de Compra</label>
-                                            <select id="pedido-grupoDeCompra" name="grupoDeCompra" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-fiesc-blue focus:ring-fiesc-blue p-2 bg-gray-50">
-                                                <!-- Opções de grupo inseridas pelo JS -->
-                                            </select>
-                                        </div>
-
                                         <div class="sm:col-span-2">
                                             <label for="pedido-codigoProduto" class="block text-sm font-medium text-gray-700">Código do Produto</label>
                                             <input type="text" id="pedido-codigoProduto" name="codigoProduto" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-fiesc-blue focus:ring-fiesc-blue p-2 bg-gray-50">
@@ -1647,6 +1724,27 @@
                                                     <label for="pedido-status" class="block text-sm font-medium text-gray-700">Status do Pedido</label>
                                                     <select id="pedido-status" name="status" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-fiesc-blue focus:ring-fiesc-blue p-2 bg-gray-50"></select>
                                                 </div>
+
+                                                <!-- ATUALIZAÇÃO: Campos movidos para cá -->
+                                                <div class="sm:col-span-2" id="campo-modalidade-container">
+                                                    <label for="pedido-modalidade" class="block text-sm font-medium text-gray-700">Modalidade</label>
+                                                    <select id="pedido-modalidade" name="modalidade" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-fiesc-blue focus:ring-fiesc-blue p-2 bg-gray-50">
+                                                        <option value="Produto">Produto</option>
+                                                        <option value="Serviço">Serviço</option>
+                                                        <option value="Contrato">Contrato</option>
+                                                        <option value="Compra Regional">Compra Regional</option>
+                                                        <option value="Requisição CD">Requisição CD</option>
+                                                        <option value="Fundo Rotativo">Fundo Rotativo</option>
+                                                    </select>
+                                                </div>
+                                                <div class="sm:col-span-2" id="campo-grupoDeCompra-container">
+                                                    <label for="pedido-grupoDeCompra" class="block text-sm font-medium text-gray-700">Grupo de Compra</label>
+                                                    <select id="pedido-grupoDeCompra" name="grupoDeCompra" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-fiesc-blue focus:ring-fiesc-blue p-2 bg-gray-50">
+                                                        <!-- Opções de grupo inseridas pelo JS -->
+                                                    </select>
+                                                </div>
+                                                <!-- FIM DA ATUALIZAÇÃO -->
+
                                                 <div class="sm:col-span-2">
                                                     <label for="pedido-dataPrevisao" class="block text-sm font-medium text-gray-700">Previsão de Entrega</label>
                                                     <input type="date" id="pedido-dataPrevisao" name="dataPrevisao" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-fiesc-blue focus:ring-fiesc-blue p-2 bg-gray-50">
