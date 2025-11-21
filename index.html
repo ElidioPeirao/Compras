@@ -51,7 +51,8 @@
         let currentUserProfile = {}; 
         let unsubscribePedidos = null; 
         let unsubscribeLinks = null; 
-        let unsubscribeFornecedores = null; 
+        let unsubscribeFornecedores = null;
+        let unsubscribeUnidades = null; 
         let searchDebounceTimer = null;
 
         try {
@@ -68,11 +69,8 @@
         const state = {
             pedidos: [], 
             fornecedores: [], 
-            unidades: [ 
-                "SENAI Brusque", "SENAI SJB", "SESI 203", "SESI 236", "SESI 238", "SESI 2028", "SESI 2059",
-                "SENAI Itajaí", "SENAI BC", "SESI 211", "SESI 264", "SESI 277", "SESI 2033", "SESI 2055",
-                "SESI/SENAI DR"
-            ],
+            unidadesList: [], // Lista completa de objetos de unidade
+            unidades: [], // Apenas os nomes para compatibilidade (será preenchido dinamicamente)
             gruposDeCompra: [
                 "Alimentos", "Serviços", "Mobiliário", "Equip. materiais médicos e odontológicos",
                 "Materiais de Expediente", "EPI", "Limpeza", "Compra Regional", "Contrato",
@@ -111,10 +109,10 @@
                     const docSnap = await getDoc(doc(db, `artifacts/${appId}/public/data/user_profiles`, user.uid));
                     if (docSnap.exists()) currentUserProfile = docSnap.data();
                     else {
-                        currentUserProfile = { nome: user.email.split('@')[0], email: user.email, perfil: "Solicitante", unidade: state.unidades[0] };
+                        currentUserProfile = { nome: user.email.split('@')[0], email: user.email, perfil: "Solicitante", unidade: "" };
                         await setDoc(doc(db, `artifacts/${appId}/public/data/user_profiles`, user.uid), currentUserProfile);
                     }
-                } catch (e) { currentUserProfile = { nome: user.email, perfil: "Solicitante", unidade: state.unidades[0] }; }
+                } catch (e) { currentUserProfile = { nome: user.email, perfil: "Solicitante", unidade: "" }; }
 
                 document.getElementById('user-name-display').textContent = currentUserProfile.nome;
                 document.getElementById('user-role-display').textContent = currentUserProfile.perfil;
@@ -126,6 +124,7 @@
                 fetchPedidos(); 
                 fetchLinksExternos();
                 fetchFornecedores(); 
+                fetchUnidades(); 
 
                 if (currentUserProfile.perfil === 'Admin') fetchUsuarios();
                 
@@ -136,6 +135,7 @@
                 appPage.classList.add('hidden');
                 if (unsubscribePedidos) unsubscribePedidos();
                 if (unsubscribeFornecedores) unsubscribeFornecedores();
+                if (unsubscribeUnidades) unsubscribeUnidades();
             }
         });
 
@@ -143,6 +143,7 @@
             const perfil = currentUserProfile.perfil || "Solicitante";
             const adminNav = document.getElementById('nav-admin');
             const fornNav = document.getElementById('nav-fornecedores-item');
+            const unitNav = document.getElementById('nav-unidades-item'); 
             const nfNav = document.getElementById('nav-nf-item');
             const solNav = document.getElementById('nav-solicitacoes-item');
             const servNav = document.getElementById('nav-servicos-item');
@@ -152,6 +153,7 @@
             // Reset
             adminNav.classList.add('hidden');
             fornNav.classList.add('hidden');
+            unitNav.classList.add('hidden');
             nfNav.classList.add('hidden');
             solNav.classList.remove('hidden'); // Default visible
             servNav.classList.remove('hidden'); // Default visible for services
@@ -160,7 +162,6 @@
             if (perfil === 'Solicitante') {
                 solText.textContent = "Solicitação de Suprimentos";
                 servText.textContent = "Solicitação de Serviços";
-                // Atualiza também o título da página
                 document.getElementById('servicos-title').textContent = "Meus Serviços Solicitados";
             } else {
                 solText.textContent = "Gestão de Suprimentos";
@@ -171,10 +172,12 @@
             if (perfil === 'Admin') {
                 adminNav.classList.remove('hidden');
                 fornNav.classList.remove('hidden');
+                unitNav.classList.remove('hidden');
                 nfNav.classList.remove('hidden');
             } 
             else if (perfil === 'Aquisicoes') {
                 fornNav.classList.remove('hidden');
+                unitNav.classList.remove('hidden');
                 nfNav.classList.remove('hidden');
             }
             else if (perfil === 'Recebedor') {
@@ -209,6 +212,8 @@
                 renderServicosPage();
             } else if (pageId === 'fornecedores') { 
                 renderFornecedoresPage();
+            } else if (pageId === 'gestao-unidades') { 
+                renderUnidadesPage();
             } else if (pageId === 'gestao-nf') { 
                 renderGestaoNFPage();
             } else if (pageId === 'dashboard') {
@@ -228,6 +233,7 @@
             const curU = u.value; const curM = m.value; const curS = s.value;
 
             u.innerHTML = '<option value="">Todas Unidades</option>';
+            // Agora usa a lista dinâmica
             state.unidades.forEach(x => u.innerHTML += `<option value="${x}">${x}</option>`);
             
             m.innerHTML = '<option value="">Todas Modalidades</option>';
@@ -373,10 +379,11 @@
                         <td class="px-3 py-4">
                             <span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${st.class}">${st.text}</span>
                         </td>
-                        <td class="px-3 py-4 text-right">
+                        <td class="px-3 py-4 text-right flex justify-end gap-2">
                             <button onclick="window.openPedidoModal('${item.id}')" class="text-gray-400 hover:text-primary-600">
                                 <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
                             </button>
+                            ${isGestor ? `<button onclick="window.openCotacaoModal('${item.id}', false)" class="text-green-600 hover:text-green-800" title="Gerar Ficha de Cotação"><svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg></button>` : ''}
                         </td>
                     `;
                 }
@@ -444,6 +451,231 @@
             });
         }
 
+        // --- UNIDADES (NOVO) ---
+        function renderUnidadesPage() {
+            const tbody = document.getElementById('tabela-unidades-body');
+            if (!tbody) return;
+            tbody.innerHTML = '';
+            
+            if (state.unidadesList.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="6" class="py-8 text-center text-gray-500">Nenhuma unidade cadastrada.</td></tr>`;
+                return;
+            }
+
+            state.unidadesList.forEach(u => {
+                tbody.innerHTML += `
+                    <tr class="border-b border-gray-100 hover:bg-gray-50">
+                        <td class="px-4 py-3 text-sm font-medium text-gray-900">${u.empresa}</td>
+                        <td class="px-4 py-3 text-sm text-gray-600">${u.filial}</td>
+                        <td class="px-4 py-3 text-sm text-gray-600">${u.municipio || '-'}</td>
+                        <td class="px-4 py-3 text-sm text-gray-600">${u.cnpj || '-'}</td>
+                        <td class="px-4 py-3 text-right flex justify-end gap-3">
+                            <button onclick="editUnidade('${u.id}')" class="text-primary-600 hover:text-primary-800 text-sm font-medium">Editar</button>
+                            <button onclick="deleteUnidade('${u.id}')" class="text-red-500 hover:text-red-700">
+                                <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                            </button>
+                        </td>
+                    </tr>
+                `;
+            });
+        }
+        
+        window.deleteUnidade = async (id) => {
+            if(!confirm("Deseja excluir esta unidade?")) return;
+            try {
+                await deleteDoc(doc(db, `artifacts/${appId}/public/data/unidades`, id));
+                showNotification("Unidade removida.", "success");
+            } catch(e) { showNotification("Erro ao remover unidade.", "error"); }
+        };
+        
+        window.openUnidadeModal = (id = null) => {
+            const f = document.getElementById('form-unidade');
+            f.reset();
+            f.dataset.id = id || "";
+
+            if (id) {
+                const u = state.unidadesList.find(x => x.id === id);
+                if (u) {
+                    f.empresa.value = u.empresa || '';
+                    f.filial.value = u.filial || '';
+                    f.cnpj.value = u.cnpj || '';
+                    f.ie.value = u.ie || '';
+                    f.telefone.value = u.telefone || '';
+                    f.endereco.value = u.endereco || '';
+                    f.numero.value = u.numero || '';
+                    f.bairro.value = u.bairro || '';
+                    f.complemento.value = u.complemento || '';
+                    f.cep.value = u.cep || '';
+                    f.contato.value = u.contato || '';
+                    f.municipio.value = u.municipio || '';
+                    f.email.value = u.email || '';
+                    document.getElementById('modal-unidade-title').textContent = "Editar Unidade";
+                }
+            } else {
+                 document.getElementById('modal-unidade-title').textContent = "Cadastro de Unidade";
+            }
+            
+            document.getElementById('modal-unidade').classList.remove('hidden');
+        };
+
+        window.editUnidade = (id) => window.openUnidadeModal(id);
+        window.closeUnidadeModal = () => document.getElementById('modal-unidade').classList.add('hidden');
+
+        // --- MODAL COTAÇÃO (NOVO) ---
+        window.openCotacaoModal = (idOrRN, isGroup) => {
+            const modal = document.getElementById('modal-ficha-cotacao');
+            const select = document.getElementById('select-unidade-cotacao');
+            
+            select.innerHTML = '<option value="">--- Selecione a Unidade Emissora ---</option>';
+            state.unidadesList.forEach(u => {
+                select.innerHTML += `<option value="${u.id}">${u.filial} (${u.cnpj})</option>`;
+            });
+            
+            // Salva o contexto para a geração da ficha
+            document.getElementById('btn-gerar-ficha').dataset.target = idOrRN;
+            document.getElementById('btn-gerar-ficha').dataset.isgroup = isGroup;
+
+            modal.classList.remove('hidden');
+        };
+
+        window.closeCotacaoModal = () => document.getElementById('modal-ficha-cotacao').classList.add('hidden');
+
+        window.generateCotacaoFicha = async () => {
+            const unidadeId = document.getElementById('select-unidade-cotacao').value;
+            const idOrRN = document.getElementById('btn-gerar-ficha').dataset.target;
+            const isGroup = document.getElementById('btn-gerar-ficha').dataset.isgroup === 'true';
+
+            if (!unidadeId) return showNotification("Selecione a unidade emissora.", "error");
+            
+            const unidade = state.unidadesList.find(u => u.id === unidadeId);
+            if (!unidade) return showNotification("Unidade não encontrada.", "error");
+
+            let items = [];
+            let referencia = idOrRN;
+
+            if (isGroup) {
+                // Se for lote (separados por vírgula)
+                if (idOrRN.includes(',')) {
+                    const ids = idOrRN.split(',');
+                    items = state.pedidos.filter(p => ids.includes(p.id));
+                    referencia = 'Lote de Solicitações';
+                } 
+                // Se for RN (grupo)
+                else {
+                    items = state.pedidos.filter(p => p.numRN === idOrRN);
+                    referencia = `RN ${idOrRN}`;
+                    if (items.length > 0 && items[0].numOC) referencia += ` / OC ${items[0].numOC}`;
+                }
+
+            } else {
+                // Item individual
+                const item = state.pedidos.find(p => p.id === idOrRN);
+                if (item) {
+                    items.push(item);
+                    referencia = item.numRN ? `RN ${item.numRN}` : `Item ${item.id.substring(0, 5)}`;
+                } else {
+                    return showNotification("Pedido não encontrado.", "error");
+                }
+            }
+            
+            // Montagem da tabela de itens (SIMPLIFICADA)
+            let itemsTableHTML = items.map((item, index) => {
+                // Se for serviço, usa a descrição como nome
+                const nome = item.modalidade === 'Serviço' ? item.nomeProduto : `${item.nomeProduto} ${item.variacao ? `(${item.variacao})` : ''}`;
+
+                return `
+                    <tr class="border-b">
+                        <td class="p-2 text-sm text-gray-700">${index + 1}</td>
+                        <td class="p-2 text-sm text-gray-700">${nome}</td>
+                        <td class="p-2 text-sm font-bold text-center">${item.quantidade}</td>
+                        <td class="p-2 text-sm text-gray-700"></td>
+                    </tr>
+                `;
+            }).join('');
+
+            // Data de Emissão Formatada
+            const dataEmissao = new Date().toLocaleDateString('pt-BR');
+
+            // HTML da Ficha para Impressão
+            const printContent = `
+                <style>
+                    body { font-family: 'Inter', sans-serif; margin: 0; padding: 20px; font-size: 10pt; color: #333; }
+                    .ficha { max-width: 800px; margin: 0 auto; border: 1px solid #ccc; padding: 20px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+                    .header h1 { font-size: 16pt; margin: 0 0 5px 0; color: #1d4ed8; }
+                    .header h2 { font-size: 10pt; margin: 0 0 15px 0; color: #555; border-bottom: 2px solid #1d4ed8; padding-bottom: 5px; }
+                    .info-box { border: 1px solid #ddd; border-radius: 4px; padding: 10px; margin-bottom: 15px; }
+                    .info-box h3 { font-size: 10pt; margin: 0 0 5px 0; font-weight: bold; color: #1d4ed8; }
+                    .info-box p { margin: 0; line-height: 1.4; }
+                    .table-title { font-weight: bold; background-color: #f3f4f6; padding: 5px; border-radius: 4px; margin-bottom: 5px; }
+                    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+                    th, td { border: 1px solid #eee; padding: 8px; text-align: left; }
+                    th { background-color: #eef2ff; color: #1e40af; font-size: 8pt; text-transform: uppercase; }
+                    .footer { margin-top: 30px; border-top: 1px solid #ccc; padding-top: 10px; text-align: center; font-size: 8pt; color: #777; }
+                    @media print {
+                        body { background: white; }
+                        .ficha { border: none; box-shadow: none; padding: 0; }
+                    }
+                </style>
+                <div class="ficha">
+                    <div class="header">
+                        <h1>FICHA DE COTAÇÃO - SOLICITAÇÃO DE COMPRA</h1>
+                        <h2>Referência: ${referencia} - Data de Emissão: ${dataEmissao}</h2>
+                    </div>
+
+                    <div class="info-box" style="display: flex; justify-content: space-between;">
+                        <div style="width: 48%;">
+                            <h3>EMITENTE (UNIDADE SOLICITANTE)</h3>
+                            <p><strong>Empresa:</strong> ${unidade.empresa}</p>
+                            <p><strong>Filial:</strong> ${unidade.filial}</p>
+                            <p><strong>CNPJ/CPF:</strong> ${unidade.cnpj || '-'}</p>
+                            <p><strong>Inscrição Estadual:</strong> ${unidade.ie || '-'}</p>
+                        </div>
+                        <div style="width: 48%;">
+                            <h3>CONTATO</h3>
+                            <p><strong>Endereço:</strong> ${unidade.endereco}, ${unidade.numero} ${unidade.complemento ? `(${unidade.complemento})` : ''}</p>
+                            <p><strong>Bairro / CEP:</strong> ${unidade.bairro || '-'} / ${unidade.cep || '-'}</p>
+                            <p><strong>Contato:</strong> ${unidade.contato || '-'}</p>
+                            <p><strong>Telefone / Email:</strong> ${unidade.telefone || '-'} / ${unidade.email || '-'}</p>
+                        </div>
+                    </div>
+
+                    <div class="table-title">ITENS A SEREM COTADOS (${items.length} itens)</div>
+
+                    <table>
+                        <thead>
+                            <tr>
+                                <th style="width: 5%;">#</th>
+                                <th style="width: 55%;">Produto/Serviço e Detalhes</th>
+                                <th style="width: 10%; text-align: center;">QTD</th>
+                                <th style="width: 30%;">Valor Unitário (Preencher Fornecedor)</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${itemsTableHTML}
+                        </tbody>
+                    </table>
+                    
+                    <div class="info-box" style="margin-top: 20px;">
+                        <h3>ORIENTAÇÕES GERAIS PARA O FORNECEDOR:</h3>
+                        <p>1. Preencher o campo "Valor Unitário" e o "Prazo de Entrega/Execução".</p>
+                        <p>2. A entrega deverá ser feita no endereço da Filial acima.</p>
+                        <p>3. Anexar e-mail com a proposta de orçamento ou carimbar este documento.</p>
+                    </div>
+
+                    <div class="footer">
+                        SISGA - Sistema Integrado de Gestão de Aquisições | Documento não fiscal.
+                    </div>
+                </div>
+            `;
+
+            const printWindow = window.open('', '', 'width=900,height=700');
+            printWindow.document.write(printContent);
+            printWindow.document.close();
+            printWindow.print();
+
+            window.closeCotacaoModal();
+        };
+
         // --- MODAL SERVIÇO ---
         window.openServicoModal = () => {
             const f = document.getElementById('form-servico');
@@ -454,16 +686,16 @@
             if(filterU) {
                 f.unidade.value = filterU;
             } else {
+                // Usa a unidade padrão do perfil
                 f.unidade.value = currentUserProfile.unidade;
             }
             
-            // Preenche selects se vazio (garantia)
-            if(f.unidade.options.length <= 1) {
-                 f.unidade.innerHTML = ''; 
-                 state.unidades.forEach(x=> f.unidade.innerHTML += `<option value="${x}">${x}</option>`);
-                 if(filterU) f.unidade.value = filterU;
-                 else f.unidade.value = currentUserProfile.unidade;
-            }
+            // Preenche selects
+            f.unidade.innerHTML = ''; 
+            state.unidades.forEach(x=> f.unidade.innerHTML += `<option value="${x}">${x}</option>`);
+            if(filterU) f.unidade.value = filterU;
+            else f.unidade.value = currentUserProfile.unidade;
+
 
             document.getElementById('modal-servico').classList.remove('hidden');
         };
@@ -536,24 +768,24 @@
                 
                 // Visual Indicator for Has NF
                 const nfIcon = item.hasNF ? 
-                    `<span class="ml-2 text-green-600" title="NF Anexada"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg></span>` : '';
+                    `<span class="ml-2 text-green-600" title="NF Anexada"><svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg></span>` : '';
 
                 let actionBtn = '';
                 if (item.hasNF) {
                      actionBtn = `
                         <div class="flex justify-end gap-2">
                             <a href="${item.nfUrl}" target="_blank" class="bg-white border border-gray-300 text-gray-700 px-2 py-1 rounded text-xs hover:bg-gray-50 flex items-center gap-1" title="Ver NF">
-                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+                                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
                             </a>
                             <button onclick="openNFModal('${item.isGroup ? item.numRN : item.id}', ${item.isGroup})" class="bg-blue-50 text-blue-600 px-2 py-1 rounded text-xs hover:bg-blue-100" title="Editar NF">
-                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+                                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
                             </button>
                         </div>
                      `;
                 } else {
                      actionBtn = `
                         <button onclick="openNFModal('${item.isGroup ? item.numRN : item.id}', ${item.isGroup})" class="bg-green-600 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-green-700 shadow-sm flex items-center gap-1 ml-auto">
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
+                            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
                             Anexar NF
                         </button>
                      `;
@@ -565,14 +797,16 @@
                      const ocDisplay = item.numOC ? `OC ${item.numOC}` : `RN ${item.numRN} (Sem OC)`;
                      tr.innerHTML = `
                         <td class="px-4 py-4 font-bold text-primary-700 flex items-center gap-2">
-                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" /></svg>
+                             <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" /></svg>
                              ${ocDisplay} ${nfIcon}
                         </td>
                         <td class="px-4 py-4 text-sm text-gray-600">Agrupamento (${item.items.length} itens)</td>
                         <td class="px-4 py-4 text-sm text-gray-900">${item.fornecedor || '-'}</td>
                         <td class="px-4 py-4 text-sm font-bold text-gray-900">R$ ${item.total.toFixed(2)}</td>
                         <td class="px-4 py-4"><span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${st.class}">${st.text}</span></td>
-                        <td class="px-4 py-4 text-right">${actionBtn}</td>
+                        <td class="px-4 py-4 text-right">
+                            <button onclick="window.openGroupDetails('${item.numRN}')" class="text-primary-600 hover:text-primary-800 text-sm font-semibold">Ver Itens &rarr;</button>
+                        </td>
                      `;
                 } else {
                      const st = STATUS_MAP[item.status] || { text: item.status, class: "bg-gray-100" };
@@ -623,7 +857,7 @@
                         <td class="px-4 py-3 text-sm text-gray-600 truncate max-w-xs" title="${f.endereco}">${f.endereco || '-'}</td>
                         <td class="px-4 py-3 text-right">
                             <button onclick="deleteFornecedor('${f.id}')" class="text-red-500 hover:text-red-700">
-                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                                <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
                             </button>
                         </td>
                     </tr>
@@ -669,6 +903,15 @@
                  if(isAquisicoes) batchContainer.classList.remove('hidden');
                  else batchContainer.classList.add('hidden');
             }
+            
+            // Botão Gerar Ficha Cotação (NOVO)
+            const btnFichaCot = document.getElementById('btn-group-ficha-cotacao');
+            if(btnFichaCot) {
+                btnFichaCot.onclick = () => window.openCotacaoModal(numRN, true);
+                if(isAquisicoes) btnFichaCot.classList.remove('hidden');
+                else btnFichaCot.classList.add('hidden');
+            }
+
 
             // Pega dados do primeiro item para preencher o modal
             const first = items[0];
@@ -696,7 +939,7 @@
                 // Botão Desvincular apenas para aquisições
                 const unlinkBtn = isAquisicoes ? 
                     `<button onclick="window.removeItemFromGroup('${p.id}')" class="text-red-600 hover:text-red-800 text-xs" title="Desvincular da RN">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" /></svg>
+                        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" /></svg>
                      </button>` : '';
                 
                 tbody.innerHTML += `
@@ -858,7 +1101,7 @@
                             ${profilesBadge}
                         </div>
                         <button onclick="deleteLink('${l.id}')" class="text-red-600 hover:text-red-800 p-1 rounded hover:bg-red-50">
-                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                            <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
                         </button>
                     </div>
                  `;
@@ -915,6 +1158,27 @@
                  }
                  if(!document.getElementById('fornecedores').classList.contains('hidden')) renderFornecedoresPage();
             });
+        }
+        async function fetchUnidades() {
+             if (unsubscribeUnidades) unsubscribeUnidades();
+             unsubscribeUnidades = onSnapshot(collection(db, `artifacts/${appId}/public/data/unidades`), s => {
+                 state.unidadesList = []; 
+                 s.forEach(d => state.unidadesList.push({id:d.id, ...d.data()}));
+                 
+                 // Atualiza a lista simples de nomes para os dropdowns
+                 state.unidades = state.unidadesList.map(u => u.filial).sort();
+                 
+                 // Re-renderiza o filtro e o select do admin (assumindo que o Admin é o único que pode ver/editar perfis)
+                 populateFilters();
+                 const adminU = document.getElementById('admin-unidade');
+                 if(adminU) {
+                    adminU.innerHTML = '';
+                    state.unidades.forEach(x => adminU.innerHTML += `<option value="${x}">${x}</option>`);
+                 }
+
+                 // Se a página de gestão estiver aberta, atualiza a tabela
+                 if(!document.getElementById('gestao-unidades').classList.contains('hidden')) renderUnidadesPage();
+             });
         }
 
         function renderNavLinks() {
@@ -1049,9 +1313,20 @@
 
         function updateBulkActionBar() {
             const b = document.getElementById('bulk-bar');
-            if(state.selectedPedidos.length > 0) { b.classList.remove('translate-y-full'); document.getElementById('bulk-count').textContent = `${state.selectedPedidos.length} selecionados`; }
+            const isAquisicoes = currentUserProfile.perfil === 'Aquisicoes' || currentUserProfile.perfil === 'Admin';
+
+            if(state.selectedPedidos.length > 0 && isAquisicoes) { 
+                b.classList.remove('translate-y-full'); 
+                document.getElementById('bulk-count').textContent = `${state.selectedPedidos.length} selecionados`;
+                
+                // Habilita o botão de gerar ficha na barra de lote
+                document.getElementById('btn-bulk-rn').onclick = () => document.getElementById('modal-agrupar').classList.remove('hidden');
+                // Quando clicar na ficha de lote, passa os IDs separados por vírgula e isGroup=false (para ser tratado como lote de IDs)
+                document.getElementById('btn-bulk-ficha').onclick = () => window.openCotacaoModal(state.selectedPedidos.join(','), false); 
+            }
             else b.classList.add('translate-y-full');
         }
+        
         function showNotification(msg, type) {
              const d = document.createElement('div');
              d.className = `fixed top-5 right-5 z-50 px-4 py-3 rounded-lg shadow-lg text-white text-sm font-medium animate-bounce ${type==='error'?'bg-red-600':'bg-green-600'}`;
@@ -1270,6 +1545,44 @@
                  } catch(err) { console.error(err); showNotification("Erro ao solicitar serviço.", "error"); }
                  finally { btn.disabled = false; btn.textContent = "Solicitar Serviço"; }
              });
+             
+             // NOVO: Save Unidade Form
+             document.getElementById('btn-nova-unidade').addEventListener('click', () => window.openUnidadeModal(null));
+             
+             document.getElementById('form-unidade').addEventListener('submit', async e => {
+                 e.preventDefault();
+                 const f = e.target;
+                 const docId = f.dataset.id;
+                 const data = {
+                     empresa: f.empresa.value,
+                     filial: f.filial.value,
+                     cnpj: f.cnpj.value,
+                     ie: f.ie.value,
+                     telefone: f.telefone.value,
+                     endereco: f.endereco.value,
+                     numero: f.numero.value,
+                     bairro: f.bairro.value,
+                     complemento: f.complemento.value,
+                     cep: f.cep.value,
+                     contato: f.contato.value,
+                     municipio: f.municipio.value,
+                     email: f.email.value
+                 };
+                 
+                 try {
+                     if (docId) {
+                         // Edição
+                         await updateDoc(doc(db, `artifacts/${appId}/public/data/unidades`, docId), data);
+                         showNotification("Unidade atualizada!", "success");
+                     } else {
+                         // Criação
+                         await addDoc(collection(db, `artifacts/${appId}/public/data/unidades`), data);
+                         showNotification("Unidade cadastrada!", "success");
+                     }
+                     f.reset(); closeUnidadeModal();
+                 } catch(err){ console.error(err); showNotification("Erro ao salvar unidade.", "error"); }
+             });
+
 
              // Calc Total
              const calc = () => {
@@ -1434,7 +1747,9 @@
              
              // Admin: Populate units select
              const adminU = document.getElementById('admin-unidade');
-             state.unidades.forEach(x => adminU.innerHTML += `<option value="${x}">${x}</option>`);
+             if(adminU) {
+                 state.unidades.forEach(x => adminU.innerHTML += `<option value="${x}">${x}</option>`);
+             }
              
              // Bulk Group
              document.getElementById('btn-bulk-rn').addEventListener('click', () => document.getElementById('modal-agrupar').classList.remove('hidden'));
@@ -1456,6 +1771,14 @@
                  showNotification("Agrupamento realizado!", "success");
                  document.getElementById('modal-agrupar').classList.add('hidden');
                  state.selectedPedidos = []; updateBulkActionBar();
+             });
+             
+             // NEW: Bulk Ficha Cotação from selected items
+             document.getElementById('btn-bulk-ficha').addEventListener('click', () => {
+                 if (state.selectedPedidos.length > 0) {
+                     // Passa a lista de IDs separados por vírgula. A lógica dentro de openCotacaoModal/generateCotacaoFicha tratará isso.
+                     window.openCotacaoModal(state.selectedPedidos.join(','), false); 
+                 }
              });
         });
     </script>
@@ -1493,7 +1816,7 @@
         <!-- SIDEBAR -->
         <div class="w-64 bg-primary-900 text-white flex flex-col fixed h-full z-20 shadow-xl">
             <div class="h-16 flex items-center px-6 font-bold text-xl tracking-wider border-b border-primary-800 bg-primary-950">
-                SISGA <span class="text-primary-400 text-xs ml-2 font-normal">v2.3</span>
+                SISGA <span class="text-primary-400 text-xs ml-2 font-normal">v2.6</span>
             </div>
             
             <nav class="flex-1 px-3 py-6 space-y-1 overflow-y-auto">
@@ -1525,6 +1848,12 @@
                 <button id="nav-fornecedores-item" data-page="fornecedores" class="nav-item w-full group flex items-center px-3 py-2.5 text-sm font-medium rounded-md transition-colors text-primary-100 hover:bg-primary-800 hover:text-white hidden">
                     <svg class="mr-3 h-5 w-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" /></svg>
                     Fornecedores
+                </button>
+                
+                <!-- NOVO: Gestão de Unidade -->
+                <button id="nav-unidades-item" data-page="gestao-unidades" class="nav-item w-full group flex items-center px-3 py-2.5 text-sm font-medium rounded-md transition-colors text-primary-100 hover:bg-primary-800 hover:text-white hidden">
+                    <svg class="mr-3 h-5 w-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" /></svg>
+                    Gestão de Unidade
                 </button>
 
                 <div id="nav-admin" class="hidden pt-4">
@@ -1605,7 +1934,7 @@
                     <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
                         <h2 class="text-2xl font-bold text-gray-900">Solicitações de Compra</h2>
                         <button onclick="openPedidoModal()" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500">
-                            <svg class=" -ml-1 mr-2 h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" /></svg>
+                            <svg class="-ml-1 mr-2 h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" /></svg>
                             Nova Solicitação
                         </button>
                     </div>
@@ -1737,6 +2066,34 @@
                         </div>
                     </div>
                 </div>
+                
+                <!-- UNIDADES PAGE (NOVO) -->
+                <div id="gestao-unidades" class="page-content hidden w-full">
+                    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
+                        <h2 class="text-2xl font-bold text-gray-900">Gestão de Unidades</h2>
+                        <button id="btn-nova-unidade" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700 focus:outline-none">
+                            <svg class="-ml-1 mr-2 h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" /></svg>
+                            Nova Unidade
+                        </button>
+                    </div>
+                    
+                    <div class="bg-white shadow-sm border border-gray-200 rounded-lg overflow-hidden">
+                        <div class="overflow-x-auto">
+                            <table class="min-w-full divide-y divide-gray-200">
+                                <thead class="bg-gray-50">
+                                    <tr>
+                                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Empresa</th>
+                                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Filial</th>
+                                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Município</th>
+                                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">CNPJ</th>
+                                            <th class="px-4 py-3"></th>
+                                    </tr>
+                                </thead>
+                                <tbody id="tabela-unidades-body" class="bg-white divide-y divide-gray-200"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
 
                 <!-- ADMIN PAGE -->
                 <div id="admin" class="page-content hidden max-w-7xl mx-auto">
@@ -1823,7 +2180,7 @@
                                         <label class="block text-sm font-medium text-gray-700 mb-2">Quem pode acessar?</label>
                                         <div class="grid grid-cols-2 gap-2">
                                             <label class="inline-flex items-center">
-                                                <input type="checkbox" name="linkAccess" value="Solicitante" class="rounded border-gray-300 text-primary-600 shadow-sm focus:border-primary-300 focus:ring focus:ring-primary-200 focus:ring-opacity-50">
+                                                <input type="checkbox" name="linkAccess" value="Solicitante" class="rounded border-gray-300 text-primary-600 shadow-sm focus:border-primary-300 focus:ring focus:ring-200 focus:ring-opacity-50">
                                                 <span class="ml-2 text-sm text-gray-600">Solicitante</span>
                                             </label>
                                             <label class="inline-flex items-center">
@@ -1864,13 +2221,97 @@
             <span class="bg-primary-100 text-primary-800 text-xs font-bold px-2.5 py-0.5 rounded-full uppercase tracking-wide">Lote</span>
             <span id="bulk-count" class="font-semibold text-gray-900">0 selecionados</span>
         </div>
-        <button id="btn-bulk-rn" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700 focus:outline-none">
-            <svg class="mr-2 -ml-1 h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" /></svg>
-            Vincular a RN
-        </button>
+        <div class="flex gap-3">
+            <!-- Botão de Gerar Ficha para Lote -->
+            <button id="btn-bulk-ficha" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none">
+                <svg class="mr-2 -ml-1 h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                Gerar Ficha Lote
+            </button>
+            <button id="btn-bulk-rn" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700 focus:outline-none">
+                <svg class="mr-2 -ml-1 h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" /></svg>
+                Vincular a RN
+            </button>
+        </div>
     </div>
 
     <!-- MODALS -->
+    
+    <!-- Modal Unidade (NOVO) -->
+    <div id="modal-unidade" class="relative z-50 hidden">
+        <div class="fixed inset-0 bg-gray-900/75 backdrop-blur-sm transition-opacity"></div>
+        <div class="fixed inset-0 z-10 overflow-y-auto">
+            <div class="flex min-h-full items-center justify-center p-4 text-center sm:p-0">
+                <div class="relative transform overflow-hidden rounded-lg bg-white text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-2xl">
+                    <form id="form-unidade" class="flex flex-col h-full">
+                        <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                            <h3 id="modal-unidade-title" class="text-lg font-bold leading-6 text-gray-900 mb-4 flex items-center gap-2">
+                                <svg class="h-6 w-6 text-primary-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" /></svg>
+                                Cadastro de Unidade
+                            </h3>
+                            <div class="grid grid-cols-12 gap-4">
+                                <div class="col-span-6">
+                                    <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Empresa</label>
+                                    <input name="empresa" required class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                                </div>
+                                <div class="col-span-6">
+                                    <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Filial</label>
+                                    <input name="filial" required class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                                </div>
+                                <div class="col-span-6">
+                                    <label class="block text-xs font-medium text-gray-700 uppercase mb-1">CNPJ/CPF</label>
+                                    <input name="cnpj" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                                </div>
+                                <div class="col-span-6">
+                                    <label class="block text-xs font-medium text-gray-700 uppercase mb-1">IE</label>
+                                    <input name="ie" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                                </div>
+                                <div class="col-span-6">
+                                    <label class="block text-xs font-medium text-gray-700 uppercase mb-1">Telefone</label>
+                                    <input name="telefone" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                                </div>
+                                <div class="col-span-6">
+                                    <label class="block text-xs font-medium text-gray-700 uppercase mb-1">Contato</label>
+                                    <input name="contato" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                                </div>
+                                <div class="col-span-6">
+                                    <label class="block text-xs font-medium text-gray-700 uppercase mb-1">Email</label>
+                                    <input name="email" type="email" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                                </div>
+                                <div class="col-span-6">
+                                    <label class="block text-xs font-medium text-gray-700 uppercase mb-1">CEP</label>
+                                    <input name="cep" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                                </div>
+                                <div class="col-span-9">
+                                    <label class="block text-xs font-medium text-gray-700 uppercase mb-1">Endereço</label>
+                                    <input name="endereco" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                                </div>
+                                <div class="col-span-3">
+                                    <label class="block text-xs font-medium text-gray-700 uppercase mb-1">Número</label>
+                                    <input name="numero" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                                </div>
+                                <div class="col-span-4">
+                                    <label class="block text-xs font-medium text-gray-700 uppercase mb-1">Bairro</label>
+                                    <input name="bairro" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                                </div>
+                                <div class="col-span-4">
+                                    <label class="block text-xs font-medium text-gray-700 uppercase mb-1">Complemento</label>
+                                    <input name="complemento" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                                </div>
+                                <div class="col-span-4">
+                                    <label class="block text-xs font-medium text-gray-700 uppercase mb-1">Município</label>
+                                    <input name="municipio" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                                </div>
+                            </div>
+                        </div>
+                        <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse border-t border-gray-200">
+                            <button type="submit" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-primary-600 text-base font-medium text-white hover:bg-primary-700 focus:outline-none sm:ml-3 sm:w-auto sm:text-sm">Salvar Unidade</button>
+                            <button type="button" onclick="closeUnidadeModal()" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">Cancelar</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
     
     <!-- Modal Serviço (NOVO) -->
     <div id="modal-servico" class="relative z-50 hidden">
@@ -1881,7 +2322,7 @@
                     <form id="form-servico" class="flex flex-col h-full">
                         <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
                             <h3 class="text-lg font-bold leading-6 text-gray-900 mb-4 flex items-center gap-2">
-                                <svg class="h-6 w-6 text-primary-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /></svg>
+                                <svg class="h-6 w-6 text-primary-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
                                 Nova Solicitação de Serviço
                             </h3>
                             
@@ -1946,6 +2387,27 @@
                          <button type="submit" class="px-4 py-2 bg-green-600 text-white rounded-md text-sm font-medium hover:bg-green-700 shadow-sm">Confirmar Recebimento</button>
                     </div>
                 </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Cotação (Novo) -->
+    <div id="modal-ficha-cotacao" class="relative z-50 hidden">
+        <div class="fixed inset-0 bg-gray-900/75 backdrop-blur-sm"></div>
+        <div class="fixed inset-0 z-10 flex items-center justify-center p-4">
+            <div class="bg-white rounded-lg shadow-xl w-full max-w-md p-6">
+                <h3 class="text-lg font-bold mb-4 text-gray-900">Gerar Ficha de Cotação (PDF)</h3>
+                <p class="text-sm text-gray-600 mb-4">Selecione a unidade que será a emissora oficial no documento.</p>
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Unidade Emissora</label>
+                        <select id="select-unidade-cotacao" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border"></select>
+                    </div>
+                    <div class="flex justify-end gap-2 pt-2">
+                         <button type="button" onclick="closeCotacaoModal()" class="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50">Cancelar</button>
+                         <button type="button" id="btn-gerar-ficha" onclick="generateCotacaoFicha()" class="px-4 py-2 bg-green-600 text-white rounded-md text-sm font-medium hover:bg-green-700 shadow-sm">Gerar Documento</button>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -2199,6 +2661,12 @@
                                 </tr>
                             </tfoot>
                         </table>
+                    </div>
+                    <div class="flex justify-end pt-4">
+                         <button id="btn-group-ficha-cotacao" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none">
+                            <svg class="mr-2 -ml-1 h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                            Gerar Ficha Cotação (RN)
+                        </button>
                     </div>
                 </div>
             </div>
