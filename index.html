@@ -145,14 +145,23 @@
             const fornNav = document.getElementById('nav-fornecedores-item');
             const nfNav = document.getElementById('nav-nf-item');
             const solNav = document.getElementById('nav-solicitacoes-item');
+            const servNav = document.getElementById('nav-servicos-item');
+            const solText = document.getElementById('nav-solicitacoes-text');
             
             // Reset
             adminNav.classList.add('hidden');
             fornNav.classList.add('hidden');
             nfNav.classList.add('hidden');
             solNav.classList.remove('hidden'); // Default visible
+            servNav.classList.remove('hidden'); // Default visible for services
 
-            // Lógica de Visibilidade
+            // Lógica de Visibilidade e Nomes
+            if (perfil === 'Solicitante') {
+                solText.textContent = "Solicitação de Suprimentos";
+            } else {
+                solText.textContent = "Gestão de Suprimentos";
+            }
+
             if (perfil === 'Admin') {
                 adminNav.classList.remove('hidden');
                 fornNav.classList.remove('hidden');
@@ -165,7 +174,8 @@
             else if (perfil === 'Recebedor') {
                 // Recebedor vê apenas Dashboard e Gestão NF
                 nfNav.classList.remove('hidden');
-                solNav.classList.add('hidden'); // Esconde Solicitações
+                solNav.classList.add('hidden'); 
+                servNav.classList.add('hidden');
             }
         }
 
@@ -189,6 +199,8 @@
                 updateBulkActionBar();
                 populateFilters();
                 renderPedidosTable(state.pedidos);
+            } else if (pageId === 'servicos') {
+                renderServicosPage();
             } else if (pageId === 'fornecedores') { 
                 renderFornecedoresPage();
             } else if (pageId === 'gestao-nf') { 
@@ -250,6 +262,9 @@
             const isMain = tableId === 'tabela-pedidos-solicitacoes';
 
             let list = pedidos.filter(p => {
+                // SEPARAÇÃO: A tabela de suprimentos mostra tudo MENOS Serviço
+                if (isMain && p.modalidade === 'Serviço') return false;
+
                 if (perfil === 'Solicitante' && p.solicitanteId !== currentUser.uid && p.nomeDemandante !== currentUserProfile.nome) return false;
                 if (state.filtros.unidade && p.unidade !== state.filtros.unidade) return false;
                 if (state.filtros.modalidade && p.modalidade !== state.filtros.modalidade) return false;
@@ -372,6 +387,82 @@
                 });
             }
         }
+
+        // --- NOVA TABELA DE SERVIÇOS ---
+        function renderServicosPage() {
+            const tbody = document.getElementById('tabela-servicos-body');
+            if (!tbody) return;
+            tbody.innerHTML = '';
+
+            const perfil = currentUserProfile.perfil || "Solicitante";
+            
+            // Filtra APENAS serviços
+            let list = state.pedidos.filter(p => {
+                if (p.modalidade !== 'Serviço') return false;
+                if (perfil === 'Solicitante' && p.solicitanteId !== currentUser.uid && p.nomeDemandante !== currentUserProfile.nome) return false;
+                return true;
+            });
+
+            if (list.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="7" class="py-10 text-center text-gray-500 text-sm">Nenhum serviço solicitado.</td></tr>`;
+                return;
+            }
+
+            list.forEach(item => {
+                const st = STATUS_MAP[item.status] || { text: item.status, class: "bg-gray-100" };
+                let previsaoStr = '-';
+                if(item.dataPrevisao) {
+                    // DataPrevisao salva como string YYYY-MM-DD no form de serviço
+                    const parts = item.dataPrevisao.split('-');
+                    previsaoStr = `${parts[2]}/${parts[1]}/${parts[0]}`;
+                }
+
+                tbody.innerHTML += `
+                    <tr class="hover:bg-gray-50 border-b border-gray-100">
+                        <td class="px-4 py-3 text-sm text-gray-900">${item.unidade}</td>
+                        <td class="px-4 py-3 text-sm text-gray-900">
+                            <div class="font-medium">${item.projeto || '-'}</div>
+                            <div class="text-xs text-gray-500 truncate max-w-xs" title="${item.nomeProduto}">${item.nomeProduto}</div>
+                        </td>
+                        <td class="px-4 py-3 text-sm text-gray-500">${item.cr || '-'}</td>
+                        <td class="px-4 py-3 text-sm text-gray-900">${item.fornecedor || '-'}</td>
+                        <td class="px-4 py-3 text-sm text-gray-900 font-mono">${previsaoStr}</td>
+                        <td class="px-4 py-3">
+                            <span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${st.class}">${st.text}</span>
+                        </td>
+                        <td class="px-4 py-3 text-right">
+                             ${item.urlOrcamento ? `<a href="${item.urlOrcamento}" target="_blank" class="text-blue-600 hover:underline text-xs mr-2">Ver Orçamento</a>` : ''}
+                        </td>
+                    </tr>
+                `;
+            });
+        }
+
+        // --- MODAL SERVIÇO ---
+        window.openServicoModal = () => {
+            const f = document.getElementById('form-servico');
+            f.reset();
+            
+            // Sincronização de filtro: Se filtro de unidade estiver ativo, usa no modal
+            const filterU = document.getElementById('filter-unidade').value;
+            if(filterU) {
+                f.unidade.value = filterU;
+            } else {
+                f.unidade.value = currentUserProfile.unidade;
+            }
+            
+            // Preenche selects se vazio (garantia)
+            if(f.unidade.options.length <= 1) {
+                 f.unidade.innerHTML = ''; 
+                 state.unidades.forEach(x=> f.unidade.innerHTML += `<option value="${x}">${x}</option>`);
+                 if(filterU) f.unidade.value = filterU;
+                 else f.unidade.value = currentUserProfile.unidade;
+            }
+
+            document.getElementById('modal-servico').classList.remove('hidden');
+        };
+        window.closeServicoModal = () => document.getElementById('modal-servico').classList.add('hidden');
+
 
         // --- GESTÃO DE NF ---
         function renderGestaoNFPage() {
@@ -781,6 +872,7 @@
                  state.pedidos = [];
                  s.forEach(d => state.pedidos.push({id:d.id, ...d.data()}));
                  if(document.getElementById('solicitacoes').classList.contains('hidden') === false) renderPedidosTable(state.pedidos);
+                 if(document.getElementById('servicos').classList.contains('hidden') === false) renderServicosPage();
                  if(document.getElementById('gestao-nf').classList.contains('hidden') === false) renderGestaoNFPage(); 
                  if(document.getElementById('dashboard').classList.contains('hidden') === false) renderDashboard();
              });
@@ -808,6 +900,12 @@
                  if(dl) {
                     dl.innerHTML = '';
                     state.fornecedores.forEach(f => dl.innerHTML += `<option value="${f.nome}"></option>`);
+                 }
+                 // Atualiza também o datalist de serviços
+                 const dlServ = document.getElementById('fornecedores-datalist-servico');
+                 if(dlServ) {
+                    dlServ.innerHTML = '';
+                    state.fornecedores.forEach(f => dlServ.innerHTML += `<option value="${f.nome}"></option>`);
                  }
                  if(!document.getElementById('fornecedores').classList.contains('hidden')) renderFornecedoresPage();
             });
@@ -892,13 +990,13 @@
             container.innerHTML = '';
 
             // Função auxiliar para criar cartão
-            const createCard = (title, value, colorClass, bgIconClass) => `
+            const createCard = (title, value, colorClass, bgIconClass, iconPath) => `
                 <div class="bg-white overflow-hidden rounded-lg shadow-sm border border-gray-100">
                     <div class="p-5">
                         <div class="flex items-center">
                             <div class="flex-shrink-0 ${bgIconClass} rounded-md p-3">
                                 <svg class="h-6 w-6 ${colorClass}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="${iconPath || 'M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z'}" />
                                 </svg>
                             </div>
                             <div class="ml-5 w-0 flex-1">
@@ -911,36 +1009,33 @@
                     </div>
                 </div>
             `;
+            
+            // Se for Recebedor, mostra APENAS Pendências de NF e encerra
+            if (currentUserProfile.perfil === 'Recebedor') {
+                container.innerHTML += createCard(
+                    'Pendências (NF)', 
+                    stats.pendingNF, 
+                    'text-red-600', 
+                    'bg-red-100',
+                    'M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z'
+                );
+                return;
+            }
 
-            // 1. Cartão Total
+            // 1. Cartão Total (Para outros perfis)
             container.innerHTML += createCard('Total Solicitações', stats.total, 'text-blue-600', 'bg-blue-100');
             
-            // 2. Cartão Pendências NF
-            container.innerHTML += `
-                <div class="bg-white overflow-hidden rounded-lg shadow-sm border border-gray-100">
-                    <div class="p-5">
-                        <div class="flex items-center">
-                            <div class="flex-shrink-0 bg-red-100 rounded-md p-3">
-                                <svg class="h-6 w-6 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                                </svg>
-                            </div>
-                            <div class="ml-5 w-0 flex-1">
-                                <dl>
-                                    <dt class="text-sm font-medium text-gray-500 truncate">Pendências (NF)</dt>
-                                    <dd class="text-2xl font-semibold text-gray-900">${stats.pendingNF}</dd>
-                                </dl>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            `;
+            // 2. Cartão Pendências NF (Para outros perfis)
+            container.innerHTML += createCard(
+                'Pendências (NF)', 
+                stats.pendingNF, 
+                'text-red-600', 
+                'bg-red-100',
+                'M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z'
+            );
 
-            // 3. Loop por todos os status do mapa
+            // 3. Loop por todos os status do mapa (Para outros perfis)
             Object.entries(STATUS_MAP).forEach(([key, config]) => {
-                // Pula 'em-atraso' se for zero, ou mostra sempre? Vamos mostrar sempre para consistência ou ocultar se zero?
-                // O usuário pediu "todos os status", então vamos mostrar todos.
-                
                 const count = statusCounts[key] || 0;
                 container.innerHTML += createCard(config.text, count, config.iconColor, config.bgIcon);
             });
@@ -979,6 +1074,12 @@
              const g = f.grupoDeCompra; g.innerHTML='<option value="">-</option>'; state.gruposDeCompra.forEach(x=>g.innerHTML+=`<option value="${x}">${x}</option>`);
              const s = f.status; s.innerHTML=''; Object.entries(STATUS_MAP).forEach(([k,v])=>s.innerHTML+=`<option value="${k}">${v.text}</option>`);
              
+             // Se tiver filtro de unidade, usar ele
+             const filterU = document.getElementById('filter-unidade').value;
+             if(filterU && !id) { // Só se for novo
+                 f.unidade.value = filterU;
+             }
+
              // Datalist de fornecedores já preenchido pelo fetchFornecedores
 
              // Admin fields
@@ -1017,7 +1118,7 @@
                      }
                  }
              } else {
-                 f.unidade.value = currentUserProfile.unidade;
+                 if(!filterU) f.unidade.value = currentUserProfile.unidade;
                  f.nomeDemandante.value = currentUserProfile.nome;
                  f.status.value = 'a-abrir-rn';
              }
@@ -1119,6 +1220,49 @@
                      window.closePedidoModal();
                  } catch(err){ console.error(err); showNotification("Erro ao salvar.", "error"); }
                  finally{ btn.disabled=false; btn.textContent="Salvar"; }
+             });
+
+             // NOVO: Save Serviço Form
+             document.getElementById('form-servico').addEventListener('submit', async e => {
+                 e.preventDefault();
+                 const btn = e.target.querySelector('button[type="submit"]');
+                 const f = e.target;
+                 
+                 btn.disabled = true; btn.textContent = "...";
+                 
+                 try {
+                     const data = {
+                         modalidade: 'Serviço', // Fixo
+                         unidade: f.unidade.value,
+                         cr: f.cr.value,
+                         projeto: f.projeto.value,
+                         nomeProduto: f.descricao.value, // Mapeia Descrição para NomeProduto
+                         dataPrevisao: f.dataPrevisao.value,
+                         fornecedor: f.fornecedor.value,
+                         
+                         // Default/Hidden
+                         status: 'a-abrir-rn',
+                         nomeDemandante: currentUserProfile.nome,
+                         solicitanteId: currentUser.uid,
+                         solicitanteEmail: currentUser.email,
+                         solicitanteNome: currentUserProfile.nome,
+                         dataSolicitacao: Timestamp.now(),
+                         grupoDeCompra: 'Serviços', // Default group
+                         quantidade: 1, // Default
+                         valorUnitario: 0, // Default 
+                         valorTotal: 0 // Default
+                     };
+                     
+                     if(f.fileOrc.files[0]) {
+                         const r = ref(storage, `artifacts/${appId}/docs/${Date.now()}_orc_servico`);
+                         await uploadBytes(r, f.fileOrc.files[0]); data.urlOrcamento = await getDownloadURL(r);
+                     }
+                     
+                     await addDoc(collection(db, `artifacts/${appId}/public/data/pedidos`), data);
+                     showNotification("Serviço solicitado!", "success");
+                     window.closeServicoModal();
+                 } catch(err) { console.error(err); showNotification("Erro ao solicitar serviço.", "error"); }
+                 finally { btn.disabled = false; btn.textContent = "Solicitar Serviço"; }
              });
 
              // Calc Total
@@ -1343,7 +1487,7 @@
         <!-- SIDEBAR -->
         <div class="w-64 bg-primary-900 text-white flex flex-col fixed h-full z-20 shadow-xl">
             <div class="h-16 flex items-center px-6 font-bold text-xl tracking-wider border-b border-primary-800 bg-primary-950">
-                SISGA <span class="text-primary-400 text-xs ml-2 font-normal">v2.2</span>
+                SISGA <span class="text-primary-400 text-xs ml-2 font-normal">v2.3</span>
             </div>
             
             <nav class="flex-1 px-3 py-6 space-y-1 overflow-y-auto">
@@ -1356,7 +1500,13 @@
                 <!-- ID ADICIONADO E NOME ALTERADO -->
                 <button id="nav-solicitacoes-item" data-page="solicitacoes" class="nav-item w-full group flex items-center px-3 py-2.5 text-sm font-medium rounded-md transition-colors text-primary-100 hover:bg-primary-800 hover:text-white">
                     <svg class="mr-3 h-5 w-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" /></svg>
-                    Gestão de Suprimentos
+                    <span id="nav-solicitacoes-text">Gestão de Suprimentos</span>
+                </button>
+
+                <!-- NOVO ITEM: Gestão de Serviços -->
+                <button id="nav-servicos-item" data-page="servicos" class="nav-item w-full group flex items-center px-3 py-2.5 text-sm font-medium rounded-md transition-colors text-primary-100 hover:bg-primary-800 hover:text-white">
+                    <svg class="mr-3 h-5 w-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                    Gestão de Serviços
                 </button>
                 
                 <!-- Item Gestão NF -->
@@ -1488,6 +1638,36 @@
                                     </tr>
                                 </thead>
                                 <tbody class="bg-white divide-y divide-gray-200"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- SERVIÇOS PAGE (NOVO) -->
+                <div id="servicos" class="page-content hidden w-full">
+                    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
+                        <h2 class="text-2xl font-bold text-gray-900">Gestão de Serviços</h2>
+                        <button onclick="openServicoModal()" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700 focus:outline-none">
+                            <svg class="-ml-1 mr-2 h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" /></svg>
+                            Solicitar Serviço
+                        </button>
+                    </div>
+
+                    <div class="bg-white shadow-sm border border-gray-200 rounded-lg overflow-hidden">
+                        <div class="overflow-x-auto">
+                            <table class="min-w-full divide-y divide-gray-200">
+                                <thead class="bg-gray-50">
+                                    <tr>
+                                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Unidade</th>
+                                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Projeto / Serviço</th>
+                                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">CR</th>
+                                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Fornecedor</th>
+                                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Data Prevista</th>
+                                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                                        <th class="px-4 py-3"></th>
+                                    </tr>
+                                </thead>
+                                <tbody id="tabela-servicos-body" class="bg-white divide-y divide-gray-200"></tbody>
                             </table>
                         </div>
                     </div>
@@ -1685,6 +1865,61 @@
     </div>
 
     <!-- MODALS -->
+    
+    <!-- Modal Serviço (NOVO) -->
+    <div id="modal-servico" class="relative z-50 hidden">
+        <div class="fixed inset-0 bg-gray-900/75 backdrop-blur-sm transition-opacity"></div>
+        <div class="fixed inset-0 z-10 overflow-y-auto">
+            <div class="flex min-h-full items-center justify-center p-4 text-center sm:p-0">
+                <div class="relative transform overflow-hidden rounded-lg bg-white text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-2xl">
+                    <form id="form-servico" class="flex flex-col h-full">
+                        <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                            <h3 class="text-lg font-bold leading-6 text-gray-900 mb-4 flex items-center gap-2">
+                                <svg class="h-6 w-6 text-primary-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /></svg>
+                                Nova Solicitação de Serviço
+                            </h3>
+                            
+                            <div class="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Unidade</label>
+                                    <select name="unidade" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border"></select>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-500 uppercase mb-1">CR</label>
+                                    <input name="cr" required class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                                </div>
+                                <div class="col-span-2">
+                                    <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Projeto</label>
+                                    <input name="projeto" required class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                                </div>
+                                <div class="col-span-2">
+                                    <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Descrição do Serviço</label>
+                                    <textarea name="descricao" required rows="3" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border"></textarea>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Data Prevista Execução</label>
+                                    <input name="dataPrevisao" type="date" required class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Fornecedor Sugerido</label>
+                                    <input list="fornecedores-datalist-servico" name="fornecedor" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border" placeholder="Busque ou digite...">
+                                    <datalist id="fornecedores-datalist-servico"></datalist>
+                                </div>
+                                <div class="col-span-2">
+                                    <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Anexar Orçamento</label>
+                                    <input type="file" name="fileOrc" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100">
+                                </div>
+                            </div>
+                        </div>
+                        <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse border-t border-gray-200">
+                            <button type="submit" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-primary-600 text-base font-medium text-white hover:bg-primary-700 focus:outline-none sm:ml-3 sm:w-auto sm:text-sm">Solicitar Serviço</button>
+                            <button type="button" onclick="closeServicoModal()" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">Cancelar</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
     
     <!-- Modal NF Upload (NOVO) -->
     <div id="modal-nf" class="relative z-50 hidden">
