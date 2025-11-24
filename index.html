@@ -26,6 +26,37 @@
         }
     </script>
     
+    <!-- CSS Personalizado para Scrollbar -->
+    <style>
+        /* Base para navegadores WebKit (Chrome, Safari) */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px; /* Para barras de rolagem horizontais */
+        }
+        
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1; /* Cor de fundo da pista */
+        }
+        
+        /* Estiliza o "polegar" (thumb) da barra de rolagem */
+        ::-webkit-scrollbar-thumb {
+            background: #ccc; 
+            border-radius: 10px;
+        }
+
+        /* Cor quando passa o mouse */
+        ::-webkit-scrollbar-thumb:hover {
+            background: #999;
+        }
+
+        /* Estilização específica para o conteúdo principal e a barra lateral */
+        .overflow-y-auto {
+            scrollbar-color: #ccc #f1f1f1; /* Firefox: thumb track */
+            scrollbar-width: thin; /* Firefox: auto | thin | none */
+        }
+
+    </style>
+
     <!-- Ícones -->
     <script type="module" src="https://unpkg.com/heroicons@2.1.3/24/outline/index.js"></script>
     
@@ -480,12 +511,13 @@
             });
         }
         
-        window.deleteUnidade = async (id) => {
-            if(!confirm("Deseja excluir esta unidade?")) return;
-            try {
-                await deleteDoc(doc(db, `artifacts/${appId}/public/data/unidades`, id));
-                showNotification("Unidade removida.", "success");
-            } catch(e) { showNotification("Erro ao remover unidade.", "error"); }
+        window.deleteUnidade = (id) => {
+            showConfirmationModal("Tem certeza que deseja excluir esta unidade? Esta ação é irreversível.", async () => {
+                try {
+                    await deleteDoc(doc(db, `artifacts/${appId}/public/data/unidades`, id));
+                    showNotification("Unidade removida.", "success");
+                } catch(e) { showNotification("Erro ao remover unidade.", "error"); }
+            });
         };
         
         window.openUnidadeModal = (id = null) => {
@@ -707,6 +739,9 @@
             const tbody = document.getElementById('tabela-nf-body');
             if (!tbody) return;
             tbody.innerHTML = '';
+
+            const perfil = currentUserProfile.perfil || "Solicitante";
+            const isGestor = perfil === 'Aquisicoes' || perfil === 'Admin';
             
             // Ler o filtro atual
             const filterType = document.getElementById('filter-nf-status') ? document.getElementById('filter-nf-status').value : 'pendente';
@@ -724,7 +759,7 @@
             // 'todos' retorna tudo
 
             if (pedidosFiltrados.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="6" class="py-10 text-center text-gray-500">Nenhum pedido encontrado com este filtro.</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="7" class="py-10 text-center text-gray-500">Nenhum pedido encontrado com este filtro.</td></tr>`;
                 return;
             }
 
@@ -744,7 +779,9 @@
                             status: p.status, 
                             fornecedor: p.fornecedor,
                             hasNF: !!p.urlNotaFiscal,
-                            nfUrl: p.urlNotaFiscal
+                            nfUrl: p.urlNotaFiscal,
+                            fin: p.fin, // Novo campo
+                            dataVcto: p.dataVcto // Novo campo
                         });
                         grouped.push(rnMap.get(p.numRN));
                     } else {
@@ -770,31 +807,64 @@
                 const nfIcon = item.hasNF ? 
                     `<span class="ml-2 text-green-600" title="NF Anexada"><svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg></span>` : '';
 
+                // Ação e Display de Vencimento
                 let actionBtn = '';
-                if (item.hasNF) {
-                     actionBtn = `
-                        <div class="flex justify-end gap-2">
-                            <a href="${item.nfUrl}" target="_blank" class="bg-white border border-gray-300 text-gray-700 px-2 py-1 rounded text-xs hover:bg-gray-50 flex items-center gap-1" title="Ver NF">
+                let vctoDisplay = '';
+                
+                if (isGestor) { // Ações Gestor/Admin
+                    if (item.hasNF) {
+                        const fin = item.fin || '---';
+                        const vcto = item.dataVcto ? item.dataVcto.split('-').reverse().join('/') : '---';
+                        vctoDisplay = `
+                            <div class="text-sm font-medium text-gray-900">${fin}</div>
+                            <div class="text-xs text-gray-500">Vcto: ${vcto}</div>
+                        `;
+
+                        actionBtn = `
+                            <div class="flex justify-end gap-2">
+                                <a href="${item.nfUrl}" target="_blank" class="bg-white border border-gray-300 text-gray-700 px-2 py-1 rounded text-xs hover:bg-gray-50 flex items-center gap-1" title="Ver NF">
+                                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+                                </a>
+                                <button onclick="openNFModal('${item.isGroup ? item.numRN : item.id}', ${item.isGroup})" class="bg-blue-50 text-blue-600 px-2 py-1 rounded text-xs hover:bg-blue-100" title="Editar NF">
+                                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+                                </button>
+                            </div>
+                        `;
+                    } else {
+                        vctoDisplay = '<div class="text-xs text-gray-400">Aguardando NF</div>';
+                        actionBtn = `
+                            <button onclick="openNFModal('${item.isGroup ? item.numRN : item.id}', ${item.isGroup})" class="bg-green-600 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-green-700 shadow-sm flex items-center gap-1 ml-auto">
+                                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
+                                Anexar NF
+                            </button>
+                        `;
+                    }
+                } else { // Recebedor (Apenas anexar/ver PDF, sem dados financeiros)
+                    if (item.hasNF) {
+                        actionBtn = `
+                            <a href="${item.nfUrl}" target="_blank" class="bg-white border border-gray-300 text-gray-700 px-2 py-1 rounded text-xs hover:bg-gray-50 flex items-center gap-1 ml-auto" title="Ver NF">
                                 <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
                             </a>
-                            <button onclick="openNFModal('${item.isGroup ? item.numRN : item.id}', ${item.isGroup})" class="bg-blue-50 text-blue-600 px-2 py-1 rounded text-xs hover:bg-blue-100" title="Editar NF">
-                                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+                        `;
+                    } else {
+                        actionBtn = `
+                            <button onclick="openNFModal('${item.isGroup ? item.numRN : item.id}', ${item.isGroup})" class="bg-green-600 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-green-700 shadow-sm flex items-center gap-1 ml-auto">
+                                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
+                                Anexar NF
                             </button>
-                        </div>
-                     `;
-                } else {
-                     actionBtn = `
-                        <button onclick="openNFModal('${item.isGroup ? item.numRN : item.id}', ${item.isGroup})" class="bg-green-600 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-green-700 shadow-sm flex items-center gap-1 ml-auto">
-                            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
-                            Anexar NF
-                        </button>
-                     `;
+                        `;
+                    }
                 }
+
 
                 if (item.isGroup) {
                      const st = STATUS_MAP[item.status] || { text: item.status, class: "bg-gray-100" };
                      // MOSTRAR OC AO INVÉS DE RN
                      const ocDisplay = item.numOC ? `OC ${item.numOC}` : `RN ${item.numRN} (Sem OC)`;
+                     
+                     // Se for Gestor/Admin, mostramos os dados financeiros na linha de grupo.
+                     const finVctoCell = isGestor ? `<td class="px-4 py-4 text-left">${vctoDisplay}</td>` : '';
+
                      tr.innerHTML = `
                         <td class="px-4 py-4 font-bold text-primary-700 flex items-center gap-2">
                              <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" /></svg>
@@ -804,6 +874,7 @@
                         <td class="px-4 py-4 text-sm text-gray-900">${item.fornecedor || '-'}</td>
                         <td class="px-4 py-4 text-sm font-bold text-gray-900">R$ ${item.total.toFixed(2)}</td>
                         <td class="px-4 py-4"><span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${st.class}">${st.text}</span></td>
+                        ${finVctoCell} 
                         <td class="px-4 py-4 text-right">
                             <button onclick="window.openGroupDetails('${item.numRN}')" class="text-primary-600 hover:text-primary-800 text-sm font-semibold">Ver Itens &rarr;</button>
                         </td>
@@ -812,12 +883,17 @@
                      const st = STATUS_MAP[item.status] || { text: item.status, class: "bg-gray-100" };
                      // MOSTRAR OC SE TIVER
                      const ocDisplay = item.numOC ? `OC ${item.numOC}` : '---';
+                     
+                     // Se for Gestor/Admin, mostramos os dados financeiros
+                     const finVctoCell = isGestor ? `<td class="px-4 py-4 text-left">${vctoDisplay}</td>` : '';
+                     
                      tr.innerHTML = `
                         <td class="px-4 py-4 text-sm text-gray-500 flex items-center gap-2">${ocDisplay} ${nfIcon}</td>
                         <td class="px-4 py-4 text-sm text-gray-900">${item.nomeProduto}</td>
                         <td class="px-4 py-4 text-sm text-gray-900">${item.fornecedor || '-'}</td>
                         <td class="px-4 py-4 text-sm font-medium text-gray-900">R$ ${parseFloat(item.valorTotal).toFixed(2)}</td>
                         <td class="px-4 py-4"><span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${st.class}">${st.text}</span></td>
+                        ${finVctoCell}
                         <td class="px-4 py-4 text-right">${actionBtn}</td>
                      `;
                 }
@@ -831,6 +907,27 @@
             f.reset();
             f.dataset.target = idOrRN;
             f.dataset.isgroup = isGroup;
+
+            const isAquisicoes = currentUserProfile.perfil === 'Aquisicoes' || currentUserProfile.perfil === 'Admin';
+            const finArea = document.getElementById('nf-admin-fields');
+            
+            if (isAquisicoes) {
+                finArea.classList.remove('hidden');
+                
+                // Preencher campos caso esteja editando (apenas se for item individual, pois dados de grupo são variáveis)
+                if (!isGroup) {
+                    const item = state.pedidos.find(p => p.id === idOrRN);
+                    if (item) {
+                        f.fin.value = item.fin || '';
+                        f.dataEmissao.value = item.dataEmissao || '';
+                        f.dataVcto.value = item.dataVcto || '';
+                        f.modalidadeNF.value = item.modalidadeNF || 'Produto'; 
+                    }
+                }
+            } else {
+                finArea.classList.add('hidden');
+            }
+
             document.getElementById('modal-nf').classList.remove('hidden');
         };
 
@@ -865,11 +962,13 @@
             });
         }
 
-        window.deleteFornecedor = async (id) => {
-            try {
-                await deleteDoc(doc(db, `artifacts/${appId}/public/data/fornecedores`, id));
-                showNotification("Fornecedor removido.", "success");
-            } catch(e) { showNotification("Erro ao remover.", "error"); }
+        window.deleteFornecedor = (id) => {
+            showConfirmationModal("Tem certeza que deseja excluir este fornecedor?", async () => {
+                try {
+                    await deleteDoc(doc(db, `artifacts/${appId}/public/data/fornecedores`, id));
+                    showNotification("Fornecedor removido.", "success");
+                } catch(e) { showNotification("Erro ao remover.", "error"); }
+            });
         };
 
         // --- MODAL GRUPO & ADMIN ---
@@ -963,17 +1062,18 @@
 
         // NOVA FUNÇÃO: REMOVER ITEM DA RN
         window.removeItemFromGroup = async (id) => {
-             if(!confirm("Tem certeza que deseja desvincular este pedido da RN?")) return;
-             try {
-                 await updateDoc(doc(db, `artifacts/${appId}/public/data/pedidos`, id), {
-                     numRN: deleteField(),
-                     dataAberturaRN: deleteField(),
-                     numOC: deleteField(), // Remove OC também
-                     status: 'a-abrir-rn' // Volta para o status inicial
-                 });
-                 showNotification("Pedido desvinculado.", "success");
-                 window.closeGroupModal(); // Fecha para forçar refresh
-             } catch(e) { showNotification("Erro ao desvincular.", "error"); }
+            showConfirmationModal("Tem certeza que deseja desvincular este pedido da RN? Ele voltará para o status 'A Abrir RN'.", async () => {
+                try {
+                    await updateDoc(doc(db, `artifacts/${appId}/public/data/pedidos`, id), {
+                        numRN: deleteField(),
+                        dataAberturaRN: deleteField(),
+                        numOC: deleteField(), // Remove OC também
+                        status: 'a-abrir-rn' // Volta para o status inicial
+                    });
+                    showNotification("Pedido desvinculado.", "success");
+                    window.closeGroupModal(); // Fecha para forçar refresh
+                } catch(e) { showNotification("Erro ao desvincular.", "error"); }
+            });
         };
 
         // NOVA FUNÇÃO: SALVAR DADOS DA RN
@@ -1060,19 +1160,20 @@
              f.scrollIntoView({behavior:'smooth'});
         };
         
-        window.deleteUser = async (id) => {
-            if(!confirm("Tem certeza que deseja excluir este usuário? Isso removerá o perfil de acesso, mas o login (Auth) permanecerá ativo até ser removido no console do Firebase.")) return;
-            try {
-                await deleteDoc(doc(db, `artifacts/${appId}/public/data/user_profiles`, id));
-                showNotification("Usuário removido do sistema.", "success");
-                // Limpa o form se o usuário deletado estiver sendo editado
-                if(document.getElementById('form-admin-user').uid.value === id) {
-                    resetAdminUserForm();
+        window.deleteUser = (id) => {
+            showConfirmationModal("Tem certeza que deseja excluir o perfil deste usuário? Isso removerá o acesso do SISGA, mas a conta de login (Auth) deve ser removida manualmente no Firebase.", async () => {
+                try {
+                    await deleteDoc(doc(db, `artifacts/${appId}/public/data/user_profiles`, id));
+                    showNotification("Usuário removido do sistema.", "success");
+                    // Limpa o form se o usuário deletado estiver sendo editado
+                    if(document.getElementById('form-admin-user').uid.value === id) {
+                        resetAdminUserForm();
+                    }
+                } catch(e) {
+                    console.error(e);
+                    showNotification("Erro ao excluir usuário.", "error");
                 }
-            } catch(e) {
-                console.error(e);
-                showNotification("Erro ao excluir usuário.", "error");
-            }
+            });
         };
 
         // Novo: Limpar form para criação
@@ -1108,9 +1209,14 @@
              });
         }
         
-        window.deleteLink = async (id) => {
-            try { await deleteDoc(doc(db, `artifacts/${appId}/public/data/links_externos`, id)); showNotification("Link removido.", "success"); }
-            catch(e) { showNotification("Erro ao remover link.", "error"); }
+        window.deleteLink = (id) => {
+            showConfirmationModal("Tem certeza que deseja remover este link?", async () => {
+                try {
+                    await deleteDoc(doc(db, `artifacts/${appId}/public/data/links_externos`, id)); 
+                    showNotification("Link removido.", "success"); 
+                }
+                catch(e) { showNotification("Erro ao remover link.", "error"); }
+            });
         };
 
         // --- AUX FUNCTIONS ---
@@ -1333,6 +1439,27 @@
              d.textContent = msg; document.body.appendChild(d);
              setTimeout(()=>d.remove(), 3000);
         }
+
+        // --- NOVO MODAL DE CONFIRMAÇÃO ---
+        window.showConfirmationModal = (message, callback) => {
+            const modal = document.getElementById('modal-confirm');
+            document.getElementById('confirm-message').textContent = message;
+
+            // Remove listeners antigos para evitar múltiplas execuções
+            const confirmBtn = document.getElementById('confirm-button');
+            confirmBtn.onclick = null; 
+
+            // Define a nova ação para o botão de confirmação
+            confirmBtn.onclick = () => {
+                modal.classList.add('hidden');
+                callback();
+            };
+
+            // Exibe o modal
+            modal.classList.remove('hidden');
+        };
+
+        window.closeConfirmationModal = () => document.getElementById('modal-confirm').classList.add('hidden');
         
         // --- MODAL PEDIDO ---
         window.openPedidoModal = (id=null) => {
@@ -1720,6 +1847,14 @@
                          recebedor: currentUserProfile.nome, // Quem recebeu
                          dataRecebimento: Timestamp.now()
                      };
+                     
+                     // Dados financeiros (se visível, ou seja, se for Aquisições/Admin)
+                     if (document.getElementById('nf-admin-fields').classList.contains('hidden') === false) {
+                         updateData.fin = f.fin.value;
+                         updateData.dataEmissao = f.dataEmissao.value;
+                         updateData.dataVcto = f.dataVcto.value;
+                         updateData.modalidadeNF = f.modalidadeNF.value;
+                     }
 
                      if (isGroup) {
                          // Update all items in RN
@@ -2029,6 +2164,7 @@
                                             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Fornecedor</th>
                                             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Valor</th>
                                             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status Atual</th>
+                                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">FIN / Vcto</th>
                                             <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Ação</th>
                                     </tr>
                                 </thead>
@@ -2373,11 +2509,38 @@
         <div class="fixed inset-0 bg-gray-900/75 backdrop-blur-sm"></div>
         <div class="fixed inset-0 z-10 flex items-center justify-center p-4">
             <div class="bg-white rounded-lg shadow-xl w-full max-w-md p-6">
-                <h3 class="text-lg font-bold mb-4 text-gray-900">Anexar Nota Fiscal</h3>
+                <h3 class="text-lg font-bold mb-4 text-gray-900">Anexar Nota Fiscal / Recebimento</h3>
                 <form id="form-nf-upload" class="space-y-4">
                     <div class="bg-blue-50 border border-blue-100 p-3 rounded text-sm text-blue-800">
-                        Ao anexar a NF, os itens serão marcados automaticamente como <strong>Entregue</strong>.
+                        Ao anexar a NF, os itens serão marcados automaticamente como <strong>Entregue</strong> na data de hoje.
                     </div>
+
+                    <!-- Campos Financeiros - Visível apenas para Aquisições/Admin -->
+                    <div id="nf-admin-fields" class="space-y-4 border-t border-gray-200 pt-4 hidden">
+                         <h4 class="text-xs font-bold text-gray-500 uppercase tracking-wider">Dados Financeiros (NF)</h4>
+                         <div class="grid grid-cols-2 gap-4">
+                             <div>
+                                <label class="block text-xs font-medium text-gray-700 mb-1">FIN</label>
+                                <input name="fin" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                            </div>
+                             <div>
+                                <label class="block text-xs font-medium text-gray-700 mb-1">Modalidade NF</label>
+                                <select name="modalidadeNF" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-white">
+                                    <option value="Produto">Produto</option>
+                                    <option value="Serviço">Serviço</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-gray-700 mb-1">Data Emissão NF</label>
+                                <input name="dataEmissao" type="date" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-gray-700 mb-1">Data Vcto</label>
+                                <input name="dataVcto" type="date" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                            </div>
+                         </div>
+                    </div>
+                    
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">Arquivo da NF</label>
                         <input type="file" id="file-nf-upload" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100">
@@ -2467,7 +2630,7 @@
                                 <!-- Search -->
                                 <div class="col-span-12 relative">
                                     <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Buscar Produto (Auto-preenchimento)</label>
-                                    <input type="text" id="inp-search" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-gray-50 placeholder-gray-400" placeholder="Digite 3 letras para buscar...">
+                                    <input type="text" id="inp-search" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-gray-50 placeholder-gray-400">
                                     <div id="pedido-results" class="absolute bg-white border border-gray-200 w-full mt-1 max-h-40 overflow-auto z-20 shadow-lg rounded-md"></div>
                                 </div>
 
@@ -2698,6 +2861,24 @@
                          <button type="submit" class="px-4 py-2 bg-primary-600 text-white rounded-md text-sm font-medium hover:bg-primary-700 shadow-sm">Salvar</button>
                     </div>
                 </form>
+            </div>
+        </div>
+    </div>
+    
+    <!-- NOVO MODAL: Confirmação Customizada -->
+    <div id="modal-confirm" class="relative z-50 hidden">
+        <div class="fixed inset-0 bg-gray-900/75 backdrop-blur-sm transition-opacity"></div>
+        <div class="fixed inset-0 z-10 flex items-center justify-center p-4">
+            <div class="bg-white rounded-lg shadow-xl w-full max-w-sm p-6 text-center">
+                <div class="flex justify-center mb-4">
+                    <svg class="h-10 w-10 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+                </div>
+                <h3 class="text-lg font-bold mb-2 text-gray-900">Confirmação Necessária</h3>
+                <p id="confirm-message" class="text-sm text-gray-500 mb-6"></p>
+                <div class="flex justify-center gap-3">
+                    <button type="button" onclick="closeConfirmationModal()" class="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50">Cancelar</button>
+                    <button type="button" id="confirm-button" class="px-4 py-2 bg-red-600 text-white rounded-md text-sm font-medium hover:bg-red-700 shadow-sm">Confirmar</button>
+                </div>
             </div>
         </div>
     </div>
