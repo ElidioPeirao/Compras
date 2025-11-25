@@ -949,15 +949,26 @@
                        // A célula de FIN/Vcto só é mostrada para o Gestor na linha de grupo.
                        const finVctoCell = isGestor ? `<td class="px-4 py-4 text-left">${vctoDisplay}</td>` : '';
                         
-                       // NOVO: Ação de grupo agora é o lápis (editar NF/FIN)
-                       const groupActionBtn = `
-                            <div class="flex justify-end gap-2">
-                                <button onclick="openNFModal('${item.numRN}', true)" class="text-primary-600 hover:text-primary-800" title="${isGestor ? 'Editar NF e Dados Financeiros (Grupo)' : 'Anexar/Atualizar NF'}">
-                                    <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
-                                </button>
-                                <button onclick="window.openGroupDetails('${item.numRN || item.items[0].id}')" class="text-gray-600 hover:text-primary-800 text-sm font-semibold">Ver Itens</button>
-                            </div>
-                       `;
+                       // Ação de grupo (Gestor/Recebedor)
+                       let groupActionHtml = '';
+                       if (isGestor) {
+                           groupActionHtml = `
+                                <div class="flex justify-end gap-2">
+                                    <button onclick="openNFModal('${item.numRN}', true)" class="text-primary-600 hover:text-primary-800" title="Editar NF e Dados Financeiros (Grupo)">
+                                        <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+                                    </button>
+                                    <button onclick="window.openGroupDetails('${item.numRN || item.items[0].id}')" class="text-gray-600 hover:text-primary-800 text-sm font-semibold">Ver Itens</button>
+                                </div>
+                           `;
+                       } else if (isRecebedor) {
+                           groupActionHtml = `
+                               <button onclick="openNFModal('${item.numRN}', true)" class="bg-green-600 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-green-700 shadow-sm flex items-center gap-1 ml-auto">
+                                   <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg> Anexar NF
+                               </button>
+                           `;
+                       } else {
+                            groupActionHtml = `<button onclick="window.openGroupDetails('${item.numRN || item.items[0].id}')" class="text-primary-600 hover:text-primary-800 text-sm font-semibold">Ver Itens &rarr;</button>`;
+                       }
 
                        tr.innerHTML = `
                         <td class="px-4 py-4 font-bold text-primary-700 flex items-center gap-2">
@@ -970,9 +981,25 @@
                         <td class="px-4 py-4"><span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${st.class}">${st.text}</span></td>
                         ${finVctoCell} 
                         <td class="px-4 py-4 text-right">
-                             ${isGestor ? groupActionBtn : `<button onclick="openNFModal('${item.numRN}', true)" class="bg-green-600 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-green-700 shadow-sm flex items-center gap-1 ml-auto">
-                                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg> Anexar NF</button>`}
+                            ${groupActionHtml}
                         </td>
+                       `;
+                } else {
+                       const st = STATUS_MAP[item.status] || { text: item.status, class: "bg-gray-100" };
+                       // MOSTRAR OC SE TIVER
+                       const ocDisplay = item.numOC ? `OC ${item.numOC}` : '---';
+                       
+                       // Se for Gestor/Admin, mostramos os dados financeiros
+                       const finVctoCell = isGestor ? `<td class="px-4 py-4 text-left">${vctoDisplay}</td>` : '';
+                       
+                       tr.innerHTML = `
+                        <td class="px-4 py-4 text-sm text-gray-500 flex items-center gap-2">${ocDisplay} ${nfIcon}</td>
+                        <td class="px-4 py-4 text-sm text-gray-900">${item.nomeProduto}</td>
+                        <td class="px-4 py-4 text-sm text-gray-900">${item.fornecedor || '-'}</td>
+                        <td class="px-4 py-4 text-sm font-medium text-gray-900">R$ ${parseFloat(item.valorTotal).toFixed(2)}</td>
+                        <td class="px-4 py-4"><span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${st.class}">${st.text}</span></td>
+                        ${finVctoCell}
+                        <td class="px-4 py-4 text-right">${actionBtn}</td>
                        `;
                 }
                 tbody.appendChild(tr);
@@ -990,10 +1017,13 @@
             const finArea = document.getElementById('nf-admin-fields');
             const submitBtn = f.querySelector('button[type="submit"]');
 
-            // 1. Visibilidade dos campos financeiros (Sempre visível para Aquisições/Admin)
+            // 1. Visibilidade e habilitação dos campos:
+            // Gestores (Aquisição/Admin) podem ver e editar FIN.
+            // Recebedores só podem ver os campos de upload e enviar/confirmar.
             if (isAquisicoes) {
                 finArea.classList.remove('hidden');
                 submitBtn.textContent = "Salvar Dados e Recebimento";
+                finArea.querySelectorAll('input, select').forEach(el => el.disabled = false); // Habilita edição
                 
                 // 2. Preencher campos se for item individual
                 if (!isGroup) {
@@ -1019,9 +1049,10 @@
                      f.dataset.currentnfurl = refItem?.urlNotaFiscal || ''; 
                 }
             } else {
-                // Recebedor: Apenas anexo/confirmação
+                // Recebedor: Oculta campos financeiros e desabilita edição
                 finArea.classList.add('hidden');
-                f.dataset.currentnfurl = ''; 
+                finArea.querySelectorAll('input, select').forEach(el => el.disabled = true); // Desabilita campos
+                f.dataset.currentnfurl = ''; // Recebedor não precisa preencher current URL
                 submitBtn.textContent = "Anexar NF e Confirmar Recebimento";
             }
 
@@ -2028,7 +2059,7 @@
                  // 1. Validação de Arquivo
                  if (!file && !currentUrl) {
                       // Se não há arquivo NOVO e não há URL existente, e não é edição puramente financeira...
-                      if (!isAquisicoes || (!f.fin.value && !f.dataEmissao.value && !f.dataVcto.value)) {
+                      if (!isAquisicoes || (!f.fin?.value && !f.dataEmissao?.value && !f.dataVcto?.value)) { // Adicionado '?' para evitar erro de Recebedor
                          return showNotification("Selecione um arquivo de NF.", "error");
                       }
                  }
