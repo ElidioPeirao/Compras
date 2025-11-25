@@ -348,17 +348,16 @@
 
             const grouped = [];
             const rnMap = new Map();
-            const groupMap = new Map(); // NOVO: Mapeamento de grupos para pedidos sem RN (grupo temporário)
 
             list.forEach(p => {
                 let effectiveStatus = p.status;
 
-                // 1. Determina o Status Visual
-                if (isGestor && p.status === 'a-abrir-rn' && !p.numRN) {
-                    effectiveStatus = 'a-inserir-rn';
+                // 1. Determina o Status Visual (Inclui a lógica de 'a-inserir-rn')
+                if (isGestor && p.status === 'a-abrir-rn' && !p.numRN && !p.dataAberturaRN) {
+                     effectiveStatus = 'a-inserir-rn';
                 }
                 
-                // 2. Tenta agrupar por RN se houver
+                // 2. Tenta agrupar por RN se houver (RNs existentes são grupos)
                 if (p.numRN && isMain) {
                     if (!rnMap.has(p.numRN)) {
                         rnMap.set(p.numRN, { isGroup: true, numRN: p.numRN, items: [p], total: parseFloat(p.valorTotal||0), status: effectiveStatus, dateRN: p.dataAberturaRN, isPendingRN: false, id: p.numRN });
@@ -367,59 +366,23 @@
                         const g = rnMap.get(p.numRN);
                         g.items.push(p);
                         g.total += parseFloat(p.valorTotal||0);
-                        // Atualiza o status do grupo para o status atual, a menos que seja "a-inserir-rn" que deve ser tratado separadamente (mas esta seção é apenas para pedidos COM RN)
                         g.status = effectiveStatus;
                     }
                 } 
-                // 3. Tenta agrupar pedidos SEM RN no status 'a-inserir-rn' (somente para Aquisições/Admin)
-                else if (isGestor && effectiveStatus === 'a-inserir-rn' && isMain) {
-                    // Chave de agrupamento temporária (ex: usando o primeiro ID como chave)
-                    // Para fins de exibição, vamos agrupar todos os pedidos elegíveis (a-inserir-rn) num único grupo de "Agrupamento Pendente"
-                    const tempGroupId = 'AGRUPAMENTO_PENDENTE';
-
-                    if (!groupMap.has(tempGroupId)) {
-                        groupMap.set(tempGroupId, { 
-                            isGroup: true, 
-                            numRN: null, 
-                            items: [p], 
-                            total: parseFloat(p.valorTotal||0), 
-                            status: effectiveStatus, 
-                            dateRN: null, 
-                            isPendingRN: true,
-                            id: tempGroupId // Usa o ID temporário ou o ID do primeiro item do grupo para abrir o modal de detalhes
-                        });
-                    } else {
-                        const g = groupMap.get(tempGroupId);
-                        g.items.push(p);
-                        g.total += parseFloat(p.valorTotal||0);
-                    }
-                }
-                // 4. Se não for agrupado por RN, adiciona como item individual (inclui Serviços e pedidos sem RN para Solicitantes)
+                // 3. SE NÃO FOI AGRUPADO POR RN, TRATA COMO ITEM INDIVIDUAL (Inclui A-INSERIR-RN individualmente)
                 else {
                     grouped.push({ isGroup: false, ...p, status: effectiveStatus });
                 }
             });
 
-            // Adiciona o grupo de pendentes (se houver) ao array final se for Gestor/Admin
-            if (isGestor && groupMap.size > 0 && isMain) {
-                 groupMap.forEach(g => {
-                    // Antes de adicionar, precisamos verificar se a lista já não contém esse grupo
-                    // Nota: Se houver filtros, o mapeamento acima pode não refletir todos os itens
-                    if (g.items.length > 0) grouped.unshift(g); // Coloca em destaque no topo
-                 });
-            }
             
-            // Ordenar: Agrupamento Pendente > RNs > Individuais
+            // Ordenar: RNs > Individuais/Pendentes
             grouped.sort((a, b) => {
-                 // Prioriza Agrupamento Pendente
-                if (a.isPendingRN && !b.isPendingRN) return -1;
-                if (!a.isPendingRN && b.isPendingRN) return 1;
+                 // Prioriza RNs
+                if (a.isGroup && !b.isGroup) return -1;
+                if (!a.isGroup && b.isGroup) return 1;
 
-                // Depois RNs
-                if (a.isGroup && !a.isPendingRN && !b.isGroup) return -1;
-                if (!a.isGroup && b.isGroup && !b.isPendingRN) return 1;
-
-                // Ordem cronológica reversa para itens individuais
+                // Ordem cronológica reversa para itens individuais/dentro de grupos
                 const dateA = a.dataSolicitacao?.toDate ? a.dataSolicitacao.toDate() : new Date(0);
                 const dateB = b.dataSolicitacao?.toDate ? b.dataSolicitacao.toDate() : new Date(0);
                 return dateB.getTime() - dateA.getTime();
@@ -1457,6 +1420,7 @@
 
         function renderNavLinks() {
              const ul = document.getElementById('nav-links-custom');
+             if(!ul) return;
              ul.innerHTML = '';
              state.linksExternos.forEach(l => {
                  // Filter logic: if allowedProfiles exists and current profile is NOT in it, skip.
