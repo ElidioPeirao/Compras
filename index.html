@@ -85,6 +85,7 @@
         let unsubscribeFornecedores = null;
         let unsubscribeUnidades = null; 
         let searchDebounceTimer = null;
+        let lastGroupIdForReturn = null; // NOVO: Armazena o ID/RN do grupo para retorno
 
         try {
             app = initializeApp(firebaseConfig);
@@ -94,7 +95,8 @@
             appId = firebaseConfig.appId;
         } catch (e) {
             console.error(e);
-            alert("Erro crítico ao conectar no Firebase.");
+            // Substitui alert() por showNotification()
+            showNotification("Erro crítico ao conectar no Firebase.", "error");
         }
         
         const state = {
@@ -118,6 +120,9 @@
         };
 
         const STATUS_MAP = {
+            // NOVO STATUS VISUAL
+            "a-inserir-rn": { text: "A Inserir RN", class: "bg-yellow-100 text-yellow-900 ring-yellow-700/20 font-bold", iconColor: "text-yellow-700", bgIcon: "bg-yellow-200" },
+
             "a-abrir-rn": { text: "A Abrir RN", class: "bg-blue-50 text-blue-700 ring-blue-600/20", iconColor: "text-blue-600", bgIcon: "bg-blue-100" },
             "em-cotacao": { text: "Em Cotação", class: "bg-yellow-50 text-yellow-800 ring-yellow-600/20", iconColor: "text-yellow-600", bgIcon: "bg-yellow-100" },
             "registrado": { text: "Registrado", class: "bg-gray-50 text-gray-600 ring-gray-500/10", iconColor: "text-gray-600", bgIcon: "bg-gray-100" },
@@ -271,13 +276,19 @@
             state.modalidadesList.forEach(x => m.innerHTML += `<option value="${x}">${x}</option>`);
 
             s.innerHTML = '<option value="">Todos Status</option>';
-            Object.entries(STATUS_MAP).forEach(([k,v]) => s.innerHTML += `<option value="${k}">${v.text}</option>`);
+            // Adiciona o status de RN pendente manualmente se for gestor, pois ele não deve ser usado em pedidos normais
+            if (currentUserProfile.perfil !== 'Solicitante') {
+                s.innerHTML += `<option value="a-inserir-rn">${STATUS_MAP["a-inserir-rn"].text}</option>`;
+            }
+            Object.entries(STATUS_MAP).filter(([k]) => k !== 'a-inserir-rn').forEach(([k,v]) => s.innerHTML += `<option value="${k}">${v.text}</option>`);
 
             u.value = curU; m.value = curM; s.value = curS;
         }
 
         function checkIsLate(item) {
-            if (['entregue', 'finalizado', 'cancelado'].includes(item.status)) return false;
+            if (!item.status) return false;
+            // Verifica status que não são mais processuais
+            if (['entregue', 'finalizado', 'cancelado'].includes(item.status)) return false; 
             if (!item.dataPrevisao) return false;
             
             const hoje = new Date();
@@ -285,6 +296,7 @@
             
             let previsao;
             try {
+                // Tenta converter Firestore Timestamp, depois string YYYY-MM-DD
                 previsao = item.dataPrevisao.toDate ? item.dataPrevisao.toDate() : new Date(item.dataPrevisao);
                 if (typeof item.dataPrevisao === 'string') {
                     const parts = item.dataPrevisao.split('-');
@@ -310,8 +322,22 @@
 
                 if (perfil === 'Solicitante' && p.solicitanteId !== currentUser.uid && p.nomeDemandante !== currentUserProfile.nome) return false;
                 if (state.filtros.unidade && p.unidade !== state.filtros.unidade) return false;
+                // Excluir Modalidade 'Serviço' do filtro Modalidade na página de Suprimentos
                 if (state.filtros.modalidade && p.modalidade !== state.filtros.modalidade) return false;
-                if (state.filtros.status && p.status !== state.filtros.status) return false;
+                
+                let pStatus = p.status;
+                // Lógica para marcar pedidos sem RN (agrupamento pendente)
+                if (isGestor && pStatus === 'a-abrir-rn' && !p.numRN && !p.dataAberturaRN) {
+                     // Adicional: Se o pedido foi marcado com status 'a-inserir-rn' pela ação de 'Agrupar'
+                     if (p.status === 'a-inserir-rn') {
+                        pStatus = 'a-inserir-rn';
+                     } else {
+                        // Se não tem RN/Data mas o status é 'a-abrir-rn'
+                        pStatus = 'a-inserir-rn';
+                     }
+                }
+                
+                if (state.filtros.status && pStatus !== state.filtros.status) return false;
                 return true;
             });
 
@@ -322,21 +348,83 @@
 
             const grouped = [];
             const rnMap = new Map();
+            const groupMap = new Map(); // NOVO: Mapeamento de grupos para pedidos sem RN (grupo temporário)
 
             list.forEach(p => {
+                let effectiveStatus = p.status;
+
+                // 1. Determina o Status Visual
+                if (isGestor && p.status === 'a-abrir-rn' && !p.numRN) {
+                    effectiveStatus = 'a-inserir-rn';
+                }
+                
+                // 2. Tenta agrupar por RN se houver
                 if (p.numRN && isMain) {
                     if (!rnMap.has(p.numRN)) {
-                        rnMap.set(p.numRN, { isGroup: true, numRN: p.numRN, items: [p], total: parseFloat(p.valorTotal||0), status: p.status, dateRN: p.dataAberturaRN });
+                        rnMap.set(p.numRN, { isGroup: true, numRN: p.numRN, items: [p], total: parseFloat(p.valorTotal||0), status: effectiveStatus, dateRN: p.dataAberturaRN, isPendingRN: false, id: p.numRN });
                         grouped.push(rnMap.get(p.numRN));
                     } else {
                         const g = rnMap.get(p.numRN);
                         g.items.push(p);
                         g.total += parseFloat(p.valorTotal||0);
+                        // Atualiza o status do grupo para o status atual, a menos que seja "a-inserir-rn" que deve ser tratado separadamente (mas esta seção é apenas para pedidos COM RN)
+                        g.status = effectiveStatus;
                     }
-                } else {
-                    grouped.push({ isGroup: false, ...p });
+                } 
+                // 3. Tenta agrupar pedidos SEM RN no status 'a-inserir-rn' (somente para Aquisições/Admin)
+                else if (isGestor && effectiveStatus === 'a-inserir-rn' && isMain) {
+                    // Chave de agrupamento temporária (ex: usando o primeiro ID como chave)
+                    // Para fins de exibição, vamos agrupar todos os pedidos elegíveis (a-inserir-rn) num único grupo de "Agrupamento Pendente"
+                    const tempGroupId = 'AGRUPAMENTO_PENDENTE';
+
+                    if (!groupMap.has(tempGroupId)) {
+                        groupMap.set(tempGroupId, { 
+                            isGroup: true, 
+                            numRN: null, 
+                            items: [p], 
+                            total: parseFloat(p.valorTotal||0), 
+                            status: effectiveStatus, 
+                            dateRN: null, 
+                            isPendingRN: true,
+                            id: tempGroupId // Usa o ID temporário ou o ID do primeiro item do grupo para abrir o modal de detalhes
+                        });
+                    } else {
+                        const g = groupMap.get(tempGroupId);
+                        g.items.push(p);
+                        g.total += parseFloat(p.valorTotal||0);
+                    }
+                }
+                // 4. Se não for agrupado por RN, adiciona como item individual (inclui Serviços e pedidos sem RN para Solicitantes)
+                else {
+                    grouped.push({ isGroup: false, ...p, status: effectiveStatus });
                 }
             });
+
+            // Adiciona o grupo de pendentes (se houver) ao array final se for Gestor/Admin
+            if (isGestor && groupMap.size > 0 && isMain) {
+                 groupMap.forEach(g => {
+                    // Antes de adicionar, precisamos verificar se a lista já não contém esse grupo
+                    // Nota: Se houver filtros, o mapeamento acima pode não refletir todos os itens
+                    if (g.items.length > 0) grouped.unshift(g); // Coloca em destaque no topo
+                 });
+            }
+            
+            // Ordenar: Agrupamento Pendente > RNs > Individuais
+            grouped.sort((a, b) => {
+                 // Prioriza Agrupamento Pendente
+                if (a.isPendingRN && !b.isPendingRN) return -1;
+                if (!a.isPendingRN && b.isPendingRN) return 1;
+
+                // Depois RNs
+                if (a.isGroup && !a.isPendingRN && !b.isGroup) return -1;
+                if (!a.isGroup && b.isGroup && !b.isPendingRN) return 1;
+
+                // Ordem cronológica reversa para itens individuais
+                const dateA = a.dataSolicitacao?.toDate ? a.dataSolicitacao.toDate() : new Date(0);
+                const dateB = b.dataSolicitacao?.toDate ? b.dataSolicitacao.toDate() : new Date(0);
+                return dateB.getTime() - dateA.getTime();
+            });
+
 
             grouped.forEach(item => {
                 const tr = document.createElement('tr');
@@ -344,6 +432,7 @@
                 
                 if (item.isGroup) {
                     let displayStatusKey = item.status;
+                    // Calcula Atraso para o primeiro item do grupo se for relevante
                     if (item.items[0] && checkIsLate(item.items[0])) {
                         displayStatusKey = 'em-atraso';
                     }
@@ -356,19 +445,31 @@
                         if(!isNaN(d)) dateStr = d.toLocaleDateString('pt-BR');
                     } catch(e){}
                     
-                    tr.className += " bg-blue-50/60";
+                    // Cor de fundo especial para grupo sem RN
+                    if (item.isPendingRN) {
+                        tr.className += " bg-yellow-50/60 font-bold";
+                    } else {
+                        tr.className += " bg-blue-50/60";
+                    }
                     
+                    const referenceDisplay = item.numRN || 'AGRUPAMENTO PENDENTE';
+                    const dateInfo = item.numRN ? `Aberta em: ${dateStr}` : 'Aguardando Inserção de RN';
+
+                    // O ID passado para openGroupDetails é o numRN se existir, senão, o ID do primeiro item do grupo (para ser usado no lookup)
+                    // Se for PENDENTE, passamos o ID do PRIMEIRO item para que o modal saiba qual grupo temporário exibir/gerir
+                    const targetId = item.numRN || item.items[0].id;
+
                     tr.innerHTML = `
                         <td class="px-3 py-4 w-10"></td>
                         <td class="px-3 py-4">
                             <div class="flex items-center gap-2 text-primary-700 font-bold">
                                 <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" /></svg>
-                                ${item.numRN}
+                                ${referenceDisplay}
                             </div>
-                            <div class="text-xs text-gray-500 mt-1">Aberta em: ${dateStr}</div>
+                            <div class="text-xs text-gray-500 mt-1">${dateInfo}</div>
                         </td>
                         <td colspan="3" class="px-3 py-4 text-sm text-gray-600 italic">
-                            Grupo com <strong>${item.items.length} itens</strong> de diversas unidades.
+                            Grupo com <strong>${item.items.length} itens</strong> de ${[...new Set(item.items.map(i => i.unidade))].join(', ')}.
                         </td>
                         <td class="px-3 py-4 text-sm text-gray-400 text-center">-</td>
                         <td class="px-3 py-4 text-sm font-bold text-gray-900">R$ ${item.total.toFixed(2)}</td>
@@ -376,7 +477,7 @@
                             <span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${st.class}">${st.text}</span>
                         </td>
                         <td class="px-3 py-4 text-right">
-                            <button onclick="window.openGroupDetails('${item.numRN}')" class="text-primary-600 hover:text-primary-800 text-sm font-semibold">Ver Itens &rarr;</button>
+                            <button onclick="window.openGroupDetails('${targetId}')" class="text-primary-600 hover:text-primary-800 text-sm font-semibold">Ver Itens &rarr;</button>
                         </td>
                     `;
                 } else {
@@ -391,7 +492,7 @@
 
                     tr.innerHTML = `
                         <td class="px-3 py-4 w-10 text-center">${check}</td>
-                        <td class="px-3 py-4 text-sm text-gray-500 font-mono">---</td>
+                        <td class="px-3 py-4 text-sm text-gray-500 font-mono">${item.numRN || '---'}</td>
                         <td class="px-3 py-4 text-sm text-gray-900">
                             <div class="font-medium">${item.unidade}</div>
                             <div class="text-xs text-gray-500">${item.nomeDemandante}</div>
@@ -411,7 +512,7 @@
                             <span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${st.class}">${st.text}</span>
                         </td>
                         <td class="px-3 py-4 text-right flex justify-end gap-2">
-                            <button onclick="window.openPedidoModal('${item.id}')" class="text-gray-400 hover:text-primary-600">
+                            <button onclick="window.openPedidoModal('${item.id}', true)" class="text-gray-400 hover:text-primary-600" title="Editar Pedido">
                                 <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
                             </button>
                             ${isGestor ? `<button onclick="window.openCotacaoModal('${item.id}', false)" class="text-green-600 hover:text-green-800" title="Gerar Ficha de Cotação"><svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg></button>` : ''}
@@ -567,10 +668,17 @@
             document.getElementById('btn-gerar-ficha').dataset.target = idOrRN;
             document.getElementById('btn-gerar-ficha').dataset.isgroup = isGroup;
 
+            // NOVO: Esconde o modal de grupo (parent) para garantir foco no child
+            document.getElementById('modal-group').classList.add('hidden'); 
+
             modal.classList.remove('hidden');
         };
 
-        window.closeCotacaoModal = () => document.getElementById('modal-ficha-cotacao').classList.add('hidden');
+        window.closeCotacaoModal = () => {
+             document.getElementById('modal-ficha-cotacao').classList.add('hidden');
+             // NOVO: Reabre o modal de grupo (parent) se ele existir e foi fechado por openCotacaoModal
+             document.getElementById('modal-group').classList.remove('hidden');
+        }
 
         window.generateCotacaoFicha = async () => {
             const unidadeId = document.getElementById('select-unidade-cotacao').value;
@@ -586,30 +694,30 @@
             let referencia = idOrRN;
 
             if (isGroup) {
-                // Se for lote (separados por vírgula)
+                 // Se for RN (grupo)
+                items = state.pedidos.filter(p => p.numRN === idOrRN);
+                referencia = `RN ${idOrRN}`;
+                if (items.length > 0 && items[0].numOC) referencia += ` / OC ${items[0].numOC}`;
+            } else {
+                // Pode ser um item individual (id) ou um lote de IDs separados por vírgula
                 if (idOrRN.includes(',')) {
                     const ids = idOrRN.split(',');
                     items = state.pedidos.filter(p => ids.includes(p.id));
                     referencia = 'Lote de Solicitações';
-                } 
-                // Se for RN (grupo)
-                else {
-                    items = state.pedidos.filter(p => p.numRN === idOrRN);
-                    referencia = `RN ${idOrRN}`;
-                    if (items.length > 0 && items[0].numOC) referencia += ` / OC ${items[0].numOC}`;
-                }
-
-            } else {
-                // Item individual
-                const item = state.pedidos.find(p => p.id === idOrRN);
-                if (item) {
-                    items.push(item);
-                    referencia = item.numRN ? `RN ${item.numRN}` : `Item ${item.id.substring(0, 5)}`;
                 } else {
-                    return showNotification("Pedido não encontrado.", "error");
+                    // Item individual
+                    const item = state.pedidos.find(p => p.id === idOrRN);
+                    if (item) {
+                        items.push(item);
+                        referencia = item.numRN ? `RN ${item.numRN}` : `Item ${item.id.substring(0, 5)}`;
+                    } else {
+                        return showNotification("Pedido não encontrado.", "error");
+                    }
                 }
             }
             
+            if (items.length === 0) return showNotification("Nenhum item para gerar a ficha.", "error");
+
             // Montagem da tabela de itens (SIMPLIFICADA)
             let itemsTableHTML = items.map((item, index) => {
                 // Se for serviço, usa a descrição como nome
@@ -700,12 +808,19 @@
                 </div>
             `;
 
-            const printWindow = window.open('', '', 'width=900,height=700');
+            // Fechamento do modal de seleção de unidade
+            window.closeCotacaoModal(); 
+            
+            // NOVO: Fecha o modal de grupo (parent) para garantir que o foco seja na nova janela de impressão
+            document.getElementById('modal-group').classList.add('hidden');
+
+            // ABRINDO EM NOVA JANELA PARA IMPRESSÃO
+            const printWindow = window.open('', '_blank', 'width=900,height=700');
             printWindow.document.write(printContent);
             printWindow.document.close();
             printWindow.print();
 
-            window.closeCotacaoModal();
+            // Não reabrimos nada automaticamente. O usuário deve fechar a janela de impressão e reabrir o grupo se necessário.
         };
 
         // --- MODAL SERVIÇO ---
@@ -746,15 +861,22 @@
             // Ler o filtro atual
             const filterType = document.getElementById('filter-nf-status') ? document.getElementById('filter-nf-status').value : 'pendente';
 
-            // Base: Pedidos Ativos
-            const pedidosAtivos = state.pedidos.filter(p => p.status !== 'cancelado' && p.status !== 'a-abrir-rn');
+            // Base: Pedidos Ativos E que não estejam mais em fase de cotação/abertura de RN
+            const pedidosAtivos = state.pedidos.filter(p => 
+                p.status !== 'cancelado' && 
+                p.status !== 'a-abrir-rn' && 
+                p.status !== 'a-inserir-rn' && 
+                p.status !== 'em-cotacao'
+            );
 
             // Aplicar filtro da aba
             let pedidosFiltrados = pedidosAtivos;
             if (filterType === 'pendente') {
-                pedidosFiltrados = pedidosAtivos.filter(p => !p.urlNotaFiscal);
+                // Pedidos que foram entregues ou estão aguardando entrega, mas sem NF anexada
+                pedidosFiltrados = pedidosAtivos.filter(p => p.status !== 'finalizado' && !p.urlNotaFiscal);
             } else if (filterType === 'entregue') {
-                pedidosFiltrados = pedidosAtivos.filter(p => p.urlNotaFiscal);
+                 // Pedidos que têm NF ou que já foram para o status entregue/finalizado (que implica NF ou que não precisa de NF)
+                pedidosFiltrados = pedidosAtivos.filter(p => p.urlNotaFiscal || ['entregue', 'finalizado', 'aguardando-lancamento'].includes(p.status));
             }
             // 'todos' retorna tudo
 
@@ -788,6 +910,12 @@
                         const g = rnMap.get(p.numRN);
                         g.items.push(p);
                         g.total += parseFloat(p.valorTotal||0);
+                        // Atualiza o status do grupo para o status "mais avançado"
+                         if (STATUS_MAP[p.status].text.length > STATUS_MAP[g.status].text.length) {
+                             g.status = p.status;
+                         }
+                        // O agrupamento herda o status de NF se qualquer item tiver NF
+                        if(!!p.urlNotaFiscal) g.hasNF = true;
                     }
                 } else {
                     grouped.push({ 
@@ -811,14 +939,14 @@
                 let actionBtn = '';
                 let vctoDisplay = '';
                 
-                if (isGestor) { // Ações Gestor/Admin
+                if (isGestor || currentUserProfile.perfil === 'Recebedor') { // Ações Gestor/Recebedor
                     if (item.hasNF) {
                         const fin = item.fin || '---';
                         const vcto = item.dataVcto ? item.dataVcto.split('-').reverse().join('/') : '---';
-                        vctoDisplay = `
+                        vctoDisplay = isGestor ? `
                             <div class="text-sm font-medium text-gray-900">${fin}</div>
                             <div class="text-xs text-gray-500">Vcto: ${vcto}</div>
-                        `;
+                        ` : '<div class="text-xs text-gray-400">NF Recebida</div>'; // Recebedor só precisa saber que foi recebida
 
                         actionBtn = `
                             <div class="flex justify-end gap-2">
@@ -831,7 +959,7 @@
                             </div>
                         `;
                     } else {
-                        vctoDisplay = '<div class="text-xs text-gray-400">Aguardando NF</div>';
+                        vctoDisplay = isGestor ? '<div class="text-xs text-gray-400">Aguardando NF</div>' : '';
                         actionBtn = `
                             <button onclick="openNFModal('${item.isGroup ? item.numRN : item.id}', ${item.isGroup})" class="bg-green-600 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-green-700 shadow-sm flex items-center gap-1 ml-auto">
                                 <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
@@ -839,36 +967,24 @@
                             </button>
                         `;
                     }
-                } else { // Recebedor (Apenas anexar/ver PDF, sem dados financeiros)
-                    if (item.hasNF) {
-                        actionBtn = `
-                            <a href="${item.nfUrl}" target="_blank" class="bg-white border border-gray-300 text-gray-700 px-2 py-1 rounded text-xs hover:bg-gray-50 flex items-center gap-1 ml-auto" title="Ver NF">
-                                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
-                            </a>
-                        `;
-                    } else {
-                        actionBtn = `
-                            <button onclick="openNFModal('${item.isGroup ? item.numRN : item.id}', ${item.isGroup})" class="bg-green-600 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-green-700 shadow-sm flex items-center gap-1 ml-auto">
-                                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
-                                Anexar NF
-                            </button>
-                        `;
-                    }
+                } else {
+                    actionBtn = '---';
+                    vctoDisplay = '---';
                 }
 
 
                 if (item.isGroup) {
-                     const st = STATUS_MAP[item.status] || { text: item.status, class: "bg-gray-100" };
-                     // MOSTRAR OC AO INVÉS DE RN
-                     const ocDisplay = item.numOC ? `OC ${item.numOC}` : `RN ${item.numRN} (Sem OC)`;
-                     
-                     // Se for Gestor/Admin, mostramos os dados financeiros na linha de grupo.
-                     const finVctoCell = isGestor ? `<td class="px-4 py-4 text-left">${vctoDisplay}</td>` : '';
+                       const st = STATUS_MAP[item.status] || { text: item.status, class: "bg-gray-100" };
+                       // MOSTRAR OC AO INVÉS DE RN
+                       const ocDisplay = item.numRN ? (item.numOC ? `OC ${item.numOC}` : `RN ${item.numRN}`) : `AGRUPAMENTO`;
+                       
+                       // A célula de FIN/Vcto só é mostrada para o Gestor na linha de grupo.
+                       const finVctoCell = isGestor ? `<td class="px-4 py-4 text-left">${vctoDisplay}</td>` : '';
 
-                     tr.innerHTML = `
+                       tr.innerHTML = `
                         <td class="px-4 py-4 font-bold text-primary-700 flex items-center gap-2">
-                             <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" /></svg>
-                             ${ocDisplay} ${nfIcon}
+                            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" /></svg>
+                            ${ocDisplay} ${nfIcon}
                         </td>
                         <td class="px-4 py-4 text-sm text-gray-600">Agrupamento (${item.items.length} itens)</td>
                         <td class="px-4 py-4 text-sm text-gray-900">${item.fornecedor || '-'}</td>
@@ -876,18 +992,18 @@
                         <td class="px-4 py-4"><span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${st.class}">${st.text}</span></td>
                         ${finVctoCell} 
                         <td class="px-4 py-4 text-right">
-                            <button onclick="window.openGroupDetails('${item.numRN}')" class="text-primary-600 hover:text-primary-800 text-sm font-semibold">Ver Itens &rarr;</button>
+                            <button onclick="window.openGroupDetails('${item.numRN || item.items[0].id}')" class="text-primary-600 hover:text-primary-800 text-sm font-semibold">Ver Itens &rarr;</button>
                         </td>
-                     `;
+                       `;
                 } else {
-                     const st = STATUS_MAP[item.status] || { text: item.status, class: "bg-gray-100" };
-                     // MOSTRAR OC SE TIVER
-                     const ocDisplay = item.numOC ? `OC ${item.numOC}` : '---';
-                     
-                     // Se for Gestor/Admin, mostramos os dados financeiros
-                     const finVctoCell = isGestor ? `<td class="px-4 py-4 text-left">${vctoDisplay}</td>` : '';
-                     
-                     tr.innerHTML = `
+                       const st = STATUS_MAP[item.status] || { text: item.status, class: "bg-gray-100" };
+                       // MOSTRAR OC SE TIVER
+                       const ocDisplay = item.numOC ? `OC ${item.numOC}` : '---';
+                       
+                       // Se for Gestor/Admin, mostramos os dados financeiros
+                       const finVctoCell = isGestor ? `<td class="px-4 py-4 text-left">${vctoDisplay}</td>` : '';
+                       
+                       tr.innerHTML = `
                         <td class="px-4 py-4 text-sm text-gray-500 flex items-center gap-2">${ocDisplay} ${nfIcon}</td>
                         <td class="px-4 py-4 text-sm text-gray-900">${item.nomeProduto}</td>
                         <td class="px-4 py-4 text-sm text-gray-900">${item.fornecedor || '-'}</td>
@@ -895,7 +1011,7 @@
                         <td class="px-4 py-4"><span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${st.class}">${st.text}</span></td>
                         ${finVctoCell}
                         <td class="px-4 py-4 text-right">${actionBtn}</td>
-                     `;
+                       `;
                 }
                 tbody.appendChild(tr);
             });
@@ -923,6 +1039,12 @@
                         f.dataVcto.value = item.dataVcto || '';
                         f.modalidadeNF.value = item.modalidadeNF || 'Produto'; 
                     }
+                } else {
+                     // Limpa campos para agrupamentos (dados variam)
+                     f.fin.value = '';
+                     f.dataEmissao.value = '';
+                     f.dataVcto.value = '';
+                     f.modalidadeNF.value = 'Produto'; 
                 }
             } else {
                 finArea.classList.add('hidden');
@@ -972,20 +1094,46 @@
         };
 
         // --- MODAL GRUPO & ADMIN ---
-        window.openGroupDetails = (numRN) => {
-            const items = state.pedidos.filter(p => p.numRN === numRN);
+        window.openGroupDetails = (idOrRN) => {
+            lastGroupIdForReturn = idOrRN; // Armazena o ID para retorno
+
+            let items;
+            // Se o ID for numérico ou curto, assume que é RN (ou o ID do item representativo do grupo pendente)
+            const isRnFormat = idOrRN.length < 10 || idOrRN === 'AGRUPAMENTO_PENDENTE';
+            let isPendingGroup = false;
+
+            if (idOrRN === 'AGRUPAMENTO_PENDENTE') {
+                 // É o grupo temporário de pedidos sem RN
+                 items = state.pedidos.filter(p => !p.numRN && p.status === 'a-abrir-rn');
+                 isPendingGroup = true;
+
+            } else if (isRnFormat && idOrRN.length < 10) {
+                 // Caso seja um RN (agrupamento já existente)
+                 items = state.pedidos.filter(p => p.numRN === idOrRN);
+            } else {
+                 // É o ID de um item individual (ex: se o agrupamento for por ID temporário ou for um erro)
+                 const item = state.pedidos.find(p => p.id === idOrRN);
+                 if (item) items = [item];
+                 else return;
+            }
+            
             if (items.length === 0) return;
+            
+            // Pega dados do primeiro item para preencher o modal
+            const first = items[0];
             
             // Preenche campos de edição da RN
             const rnInput = document.getElementById('group-rn-edit');
             const ocInput = document.getElementById('group-oc-edit');
             const dateInput = document.getElementById('group-date-edit');
 
-            rnInput.value = numRN;
-            rnInput.dataset.original = numRN;
+            // Usa o numRN se existir, senão, deixa em branco (para ser inserido)
+            rnInput.value = first.numRN || '';
+            rnInput.dataset.original = first.numRN || '';
             
-            // Controle de Acesso (NOVO)
-            const isAquisicoes = currentUserProfile.perfil === 'Aquisicoes' || currentUserProfile.perfil === 'Admin';
+            // Controle de Acesso 
+            const perfil = currentUserProfile.perfil || "Solicitante";
+            const isAquisicoes = perfil === 'Aquisicoes' || perfil === 'Admin';
             
             rnInput.disabled = !isAquisicoes;
             ocInput.disabled = !isAquisicoes;
@@ -1003,22 +1151,21 @@
                  else batchContainer.classList.add('hidden');
             }
             
-            // Botão Gerar Ficha Cotação (NOVO)
+            // Botão Gerar Ficha Cotação 
             const btnFichaCot = document.getElementById('btn-group-ficha-cotacao');
             if(btnFichaCot) {
-                btnFichaCot.onclick = () => window.openCotacaoModal(numRN, true);
+                // Passa a RN ou, se for grupo pendente, passa os IDs separados por vírgula (lote)
+                const targetForFicha = first.numRN || items.map(i => i.id).join(',');
+                const isGroupFicha = !!first.numRN; // Se tem RN, é grupo de RN. Senão, é lote de IDs.
+                btnFichaCot.onclick = () => window.openCotacaoModal(targetForFicha, isGroupFicha); 
                 if(isAquisicoes) btnFichaCot.classList.remove('hidden');
                 else btnFichaCot.classList.add('hidden');
             }
-
-
-            // Pega dados do primeiro item para preencher o modal
-            const first = items[0];
             
             if(first.dataAberturaRN) {
                  try {
-                     const d = first.dataAberturaRN.toDate ? first.dataAberturaRN.toDate() : new Date(first.dataAberturaRN);
-                     if(!isNaN(d)) dateInput.value = d.toISOString().split('T')[0];
+                      const d = first.dataAberturaRN.toDate ? first.dataAberturaRN.toDate() : new Date(first.dataAberturaRN);
+                      if(!isNaN(d)) dateInput.value = d.toISOString().split('T')[0];
                  } catch(e){ dateInput.value = ''; }
             } else dateInput.value = '';
 
@@ -1026,7 +1173,8 @@
             else ocInput.value = '';
 
             document.getElementById('group-status-select').value = first.status;
-            document.getElementById('group-status-select').dataset.rn = numRN;
+            // Para grupos pendentes (isPendingGroup = true), o 'rn' no dataset deve ser o ID do primeiro item para identificar o grupo
+            document.getElementById('group-status-select').dataset.rn = isPendingGroup ? first.id : first.numRN;
             
             const tbody = document.getElementById('group-items-body');
             tbody.innerHTML = '';
@@ -1035,8 +1183,8 @@
             items.forEach(p => {
                 total += parseFloat(p.valorTotal||0);
                 
-                // Botão Desvincular apenas para aquisições
-                const unlinkBtn = isAquisicoes ? 
+                // Botão Desvincular apenas para aquisições E se já houver RN
+                const unlinkBtn = (isAquisicoes && p.numRN) ? 
                     `<button onclick="window.removeItemFromGroup('${p.id}')" class="text-red-600 hover:text-red-800 text-xs" title="Desvincular da RN">
                         <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" /></svg>
                      </button>` : '';
@@ -1047,7 +1195,7 @@
                         <td class="py-2 px-4 text-sm">${p.nomeProduto} <span class="text-gray-400 text-xs">(${p.quantidade}x)</span></td>
                         <td class="py-2 px-4 text-sm text-right font-medium">R$ ${parseFloat(p.valorTotal).toFixed(2)}</td>
                         <td class="py-2 px-4 text-center flex justify-center gap-2">
-                             <button onclick="window.openPedidoModal('${p.id}')" class="text-blue-600 hover:underline text-xs">Editar</button>
+                             <button onclick="window.openPedidoModal('${p.id}', true)" class="text-blue-600 hover:underline text-xs">Editar</button>
                              ${unlinkBtn}
                         </td>
                     </tr>
@@ -1082,20 +1230,29 @@
             const newRN = document.getElementById('group-rn-edit').value;
             const newDate = document.getElementById('group-date-edit').value;
             const newOC = document.getElementById('group-oc-edit').value;
-            
-            if(!newRN || !oldRN) return;
+            const targetId = document.getElementById('group-status-select').dataset.rn; // ID do item se for grupo pendente
+
+            if(!newRN && !oldRN) return showNotification("O campo Número da RN é obrigatório.", "error");
 
             try {
-                // Busca todos os itens da RN antiga
-                const q = query(collection(db, `artifacts/${appId}/public/data/pedidos`), where("numRN", "==", oldRN));
-                const snap = await getDocs(q);
-                
+                let itemsToUpdate;
+                // Se não tinha RN antes, o grupo é composto por todos os pedidos sem RN/data (usaremos os pedidos do grupo atual)
+                if (!oldRN) {
+                    itemsToUpdate = state.pedidos.filter(p => !p.numRN && p.status === 'a-abrir-rn');
+                } else {
+                    // Busca todos os itens da RN antiga
+                    const q = query(collection(db, `artifacts/${appId}/public/data/pedidos`), where("numRN", "==", oldRN));
+                    const querySnap = await getDocs(q);
+                    itemsToUpdate = querySnap.docs.map(d => ({id: d.id, ref: d.ref}));
+                }
+
                 const batch = writeBatch(db);
-                snap.forEach(d => {
-                    batch.update(d.ref, {
+                itemsToUpdate.forEach(item => {
+                    batch.update(doc(db, `artifacts/${appId}/public/data/pedidos`, item.id), {
                         numRN: newRN,
                         dataAberturaRN: newDate,
-                        numOC: newOC
+                        numOC: newOC,
+                        status: 'em-cotacao' // Força status de cotação ao salvar RN/OC
                     });
                 });
                 
@@ -1107,17 +1264,28 @@
 
         window.updateGroupStatus = async () => {
             const sel = document.getElementById('group-status-select');
-            const rn = sel.dataset.rn;
+            const rnOrId = sel.dataset.rn;
             const st = sel.value;
             const btn = document.getElementById('btn-update-status');
             
             btn.disabled = true; btn.textContent = "...";
             
             try {
-                const q = query(collection(db, `artifacts/${appId}/public/data/pedidos`), where("numRN", "==", rn));
-                const snap = await getDocs(q);
+                let itemsToUpdate = [];
+
+                // Se for RN/Grupo
+                if (rnOrId.length < 10) { 
+                    itemsToUpdate = state.pedidos.filter(p => p.numRN === rnOrId);
+                } else { 
+                    // Se for ID (Grupo pendente), pega todos os pendentes, assumindo que o usuário viu o grupo completo no modal
+                    itemsToUpdate = state.pedidos.filter(p => !p.numRN && p.status === 'a-abrir-rn');
+                }
+                
                 const batch = writeBatch(db);
-                snap.forEach(d => batch.update(d.ref, { status: st }));
+                itemsToUpdate.forEach(p => {
+                    batch.update(doc(db, `artifacts/${appId}/public/data/pedidos`, p.id), { status: st });
+                });
+
                 await batch.commit();
                 showNotification("Status atualizado em lote!", "success");
                 window.closeGroupModal();
@@ -1191,20 +1359,20 @@
              div.innerHTML = '';
              state.linksExternos.forEach(l => {
                  const profilesBadge = l.allowedProfiles && l.allowedProfiles.length > 0
-                    ? `<div class="flex flex-wrap gap-1 mt-1">${l.allowedProfiles.map(p => `<span class="text-[10px] bg-blue-50 text-blue-600 px-1 rounded border border-blue-100">${p}</span>`).join('')}</div>`
-                    : `<span class="text-[10px] text-gray-400 mt-1">Todos</span>`;
+                     ? `<div class="flex flex-wrap gap-1 mt-1">${l.allowedProfiles.map(p => `<span class="text-[10px] bg-blue-50 text-blue-600 px-1 rounded border border-blue-100">${p}</span>`).join('')}</div>`
+                     : `<span class="text-[10px] text-gray-400 mt-1">Todos</span>`;
 
                  div.innerHTML += `
-                    <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-200">
-                        <div>
-                            <div class="font-medium text-sm text-gray-900">${l.nome}</div>
-                            <div class="text-xs text-gray-500 truncate w-48 mb-1">${l.url}</div>
-                            ${profilesBadge}
-                        </div>
-                        <button onclick="deleteLink('${l.id}')" class="text-red-600 hover:text-red-800 p-1 rounded hover:bg-red-50">
-                            <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                        </button>
-                    </div>
+                     <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-200">
+                         <div>
+                             <div class="font-medium text-sm text-gray-900">${l.nome}</div>
+                             <div class="text-xs text-gray-500 truncate w-48 mb-1">${l.url}</div>
+                             ${profilesBadge}
+                         </div>
+                         <button onclick="deleteLink('${l.id}')" class="text-red-600 hover:text-red-800 p-1 rounded hover:bg-red-50">
+                             <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                         </button>
+                     </div>
                  `;
              });
         }
@@ -1278,8 +1446,8 @@
                  populateFilters();
                  const adminU = document.getElementById('admin-unidade');
                  if(adminU) {
-                    adminU.innerHTML = '';
-                    state.unidades.forEach(x => adminU.innerHTML += `<option value="${x}">${x}</option>`);
+                     adminU.innerHTML = '';
+                     state.unidades.forEach(x => adminU.innerHTML += `<option value="${x}">${x}</option>`);
                  }
 
                  // Se a página de gestão estiver aberta, atualiza a tabela
@@ -1313,9 +1481,15 @@
                 
                 stats.total++;
                 
+                let effectiveStatus = p.status;
+                // Lógica para marcar pedidos sem RN (agrupamento pendente)
+                if ((!p.numRN && p.status === 'a-abrir-rn') || p.status === 'a-inserir-rn') {
+                    effectiveStatus = 'a-inserir-rn';
+                }
+
                 // Incrementa o status correspondente se existir no mapa
-                if (statusCounts[p.status] !== undefined) {
-                    statusCounts[p.status]++;
+                if (statusCounts[effectiveStatus] !== undefined) {
+                    statusCounts[effectiveStatus]++;
                 }
 
                 // Lógica especial para "Em Atraso" (Calculado)
@@ -1462,10 +1636,19 @@
         window.closeConfirmationModal = () => document.getElementById('modal-confirm').classList.add('hidden');
         
         // --- MODAL PEDIDO ---
-        window.openPedidoModal = (id=null) => {
+        // Adiciona um parâmetro opcional para saber se está vindo de um modal de grupo
+        window.openPedidoModal = (id=null, fromGroupModal=false) => {
              const f = document.getElementById('form-pedido'); f.reset(); f.dataset.id = id||"";
              document.getElementById('pedido-results').innerHTML = '';
              
+             // Estado para retorno
+             f.dataset.fromgroup = fromGroupModal;
+             
+             // NOVO: Oculta o modal de grupo para que o modal de pedido apareça por cima
+             if (fromGroupModal) {
+                 document.getElementById('modal-group').classList.add('hidden');
+             }
+
              // RESET STATE: Habilita todos os campos e reseta o botão Salvar
              const allInputs = f.querySelectorAll('input, select, textarea');
              allInputs.forEach(el => el.disabled = false);
@@ -1476,14 +1659,24 @@
              btnSave.classList.remove('bg-gray-400', 'cursor-not-allowed');
              btnSave.classList.add('bg-primary-600', 'hover:bg-primary-700');
              
+             // Botão Voltar para o grupo (Novo)
+             const btnReturn = document.getElementById('btn-return-group');
+             if (btnReturn) {
+                 if (fromGroupModal && lastGroupIdForReturn) {
+                     btnReturn.classList.remove('hidden');
+                 } else {
+                     btnReturn.classList.add('hidden');
+                 }
+             }
+
              // Preencher selects
              const u = f.unidade; u.innerHTML=''; state.unidades.forEach(x=>u.innerHTML+=`<option value="${x}">${x}</option>`);
              const m = f.modalidade; m.innerHTML=''; state.modalidadesList.forEach(x=>m.innerHTML+=`<option value="${x}">${x}</option>`);
              const g = f.grupoDeCompra; g.innerHTML='<option value="">-</option>'; state.gruposDeCompra.forEach(x=>g.innerHTML+=`<option value="${x}">${x}</option>`);
-             const s = f.status; s.innerHTML=''; Object.entries(STATUS_MAP).forEach(([k,v])=>s.innerHTML+=`<option value="${k}">${v.text}</option>`);
+             const s = f.status; s.innerHTML=''; Object.entries(STATUS_MAP).filter(([k]) => k !== 'a-inserir-rn').forEach(([k,v])=>s.innerHTML+=`<option value="${k}">${v.text}</option>`);
              
              // Se tiver filtro de unidade, usar ele
-             const filterU = document.getElementById('filter-unidade').value;
+             const filterU = document.getElementById('filter-unidade')?.value; // Adicionado null check
              if(filterU && !id) { // Só se for novo
                  f.unidade.value = filterU;
              }
@@ -1498,32 +1691,32 @@
              if(id) {
                  const p = state.pedidos.find(x=>x.id===id);
                  if(p) {
-                     f.unidade.value = p.unidade; f.nomeDemandante.value = p.nomeDemandante;
-                     f.cr.value = p.cr||''; f.projeto.value = p.projeto||'';
-                     f.nomeProduto.value = p.nomeProduto; f.codigoProduto.value = p.codigoProduto||''; f.variacao.value = p.variacao||'';
-                     f.quantidade.value = p.quantidade; f.valorUnitario.value = p.valorUnitario; f.valorTotal.value = p.valorTotal;
-                     f.descricao.value = p.descricao||'';
-                    
-                     // Admin fields populated here but visible logic handled above
-                     if(p.modalidade) f.modalidade.value = p.modalidade;
-                     if(p.grupoDeCompra) f.grupoDeCompra.value = p.grupoDeCompra;
-                     f.numRN.value = p.numRN||''; f.numOC.value = p.numOC||''; f.status.value = p.status;
-                     if(p.dataAberturaRN) f.dataAberturaRN.value = p.dataAberturaRN;
-                     if(p.dataPrevisao) f.dataPrevisao.value = p.dataPrevisao;
-                     if(p.fornecedor) f.fornecedor.value = p.fornecedor;
-                     if (p.segmento) f.segmento.value = p.segmento; // Moved to admin area logic in HTML
+                      f.unidade.value = p.unidade; f.nomeDemandante.value = p.nomeDemandante;
+                      f.cr.value = p.cr||''; f.projeto.value = p.projeto||'';
+                      f.nomeProduto.value = p.nomeProduto; f.codigoProduto.value = p.codigoProduto||''; f.variacao.value = p.variacao||'';
+                      f.quantidade.value = p.quantidade; f.valorUnitario.value = p.valorUnitario; f.valorTotal.value = p.valorTotal;
+                      f.descricao.value = p.descricao||'';
+                     
+                      // Admin fields populated here but visible logic handled above
+                      if(p.modalidade) f.modalidade.value = p.modalidade;
+                      if(p.grupoDeCompra) f.grupoDeCompra.value = p.grupoDeCompra;
+                      f.numRN.value = p.numRN||''; f.numOC.value = p.numOC||''; f.status.value = p.status;
+                      if(p.dataAberturaRN) f.dataAberturaRN.value = p.dataAberturaRN;
+                      if(p.dataPrevisao) f.dataPrevisao.value = p.dataPrevisao;
+                      if(p.fornecedor) f.fornecedor.value = p.fornecedor;
+                      if (p.segmento) f.segmento.value = p.segmento; // Moved to admin area logic in HTML
 
-                     // LÓGICA DE BLOQUEIO: Se for Solicitante E (tiver RN OU status avançado)
-                     if (currentUserProfile.perfil === 'Solicitante' && (p.numRN || p.status !== 'a-abrir-rn')) {
-                         // Desabilita inputs, selects e textareas
-                         f.querySelectorAll('input, select, textarea').forEach(el => el.disabled = true);
-                         
-                         // Bloqueia botão salvar
-                         btnSave.disabled = true;
-                         btnSave.textContent = "Bloqueado (Em Processo)";
-                         btnSave.classList.remove('bg-primary-600', 'hover:bg-primary-700');
-                         btnSave.classList.add('bg-gray-400', 'cursor-not-allowed');
-                     }
+                      // LÓGICA DE BLOQUEIO: Se for Solicitante E (tiver RN OU status avançado)
+                      if (currentUserProfile.perfil === 'Solicitante' && (p.numRN || p.status !== 'a-abrir-rn')) {
+                          // Desabilita inputs, selects e textareas
+                          f.querySelectorAll('input, select, textarea').forEach(el => el.disabled = true);
+                          
+                          // Bloqueia botão salvar
+                          btnSave.disabled = true;
+                          btnSave.textContent = "Bloqueado (Em Processo)";
+                          btnSave.classList.remove('bg-primary-600', 'hover:bg-primary-700');
+                          btnSave.classList.add('bg-gray-400', 'cursor-not-allowed');
+                      }
                  }
              } else {
                  if(!filterU) f.unidade.value = currentUserProfile.unidade;
@@ -1532,7 +1725,22 @@
              }
              document.getElementById('modal-pedido').classList.remove('hidden');
         };
-        window.closePedidoModal = () => document.getElementById('modal-pedido').classList.add('hidden');
+
+        window.closePedidoModal = () => {
+             document.getElementById('modal-pedido').classList.add('hidden');
+             // Se veio do modal de grupo e há um ID/RN salvo, reabre o modal de grupo
+             if (document.getElementById('form-pedido').dataset.fromgroup === 'true' && lastGroupIdForReturn) {
+                 window.openGroupDetails(lastGroupIdForReturn);
+             }
+        };
+
+        window.returnToGroupModal = () => {
+             document.getElementById('modal-pedido').classList.add('hidden');
+             if (lastGroupIdForReturn) {
+                 window.openGroupDetails(lastGroupIdForReturn);
+             }
+        };
+
         window.selectProduct = (n, v, g, c) => {
              const f = document.getElementById('form-pedido');
              f.nomeProduto.value = n; f.variacao.value = v; f.grupoDeCompra.value = g; f.codigoProduto.value = c;
@@ -1554,16 +1762,19 @@
 
              // Filters change
              ['filter-unidade','filter-modalidade','filter-status'].forEach(id => {
-                 document.getElementById(id).addEventListener('change', e => {
-                     state.filtros[id.replace('filter-','')] = e.target.value;
-                     renderPedidosTable(state.pedidos);
-                 });
+                const el = document.getElementById(id);
+                if (el) { // Verifica a existência do elemento
+                    el.addEventListener('change', e => {
+                         state.filtros[id.replace('filter-','')] = e.target.value;
+                         renderPedidosTable(state.pedidos);
+                    });
+                }
              });
              
              // Filter NF change (NOVO)
              const filterNF = document.getElementById('filter-nf-status');
-             if(filterNF) {
-                filterNF.addEventListener('change', renderGestaoNFPage);
+             if(filterNF) { // Verifica a existência do elemento
+                 filterNF.addEventListener('change', renderGestaoNFPage);
              }
              
              // Save Pedido
@@ -1583,47 +1794,47 @@
                          return;
                      }
                      if (!f.nomeDemandante.value.trim()) {
-                        showNotification("Demandante é obrigatório.", "error");
-                        return;
+                         showNotification("Demandante é obrigatório.", "error");
+                         return;
                      }
                  }
 
                  btn.disabled = true; btn.textContent = "...";
                  try {
                      const data = {
-                         unidade: f.unidade.value, nomeDemandante: f.nomeDemandante.value,
-                         cr: f.cr.value, projeto: f.projeto.value,
-                         nomeProduto: f.nomeProduto.value, codigoProduto: f.codigoProduto.value, variacao: f.variacao.value,
-                         quantidade: parseFloat(f.quantidade.value), valorUnitario: parseFloat(f.valorUnitario.value), valorTotal: parseFloat(f.valorTotal.value),
-                         descricao: f.descricao.value, 
-                         // Admin fields
-                         modalidade: f.modalidade.value, grupoDeCompra: f.grupoDeCompra.value,
-                         numRN: f.numRN.value, numOC: f.numOC.value, status: f.status.value,
-                         dataAberturaRN: f.dataAberturaRN.value, dataPrevisao: f.dataPrevisao.value,
-                         fornecedor: f.fornecedor.value,
-                         segmento: f.segmento.value // Moved to admin
+                          unidade: f.unidade.value, nomeDemandante: f.nomeDemandante.value,
+                          cr: f.cr.value, projeto: f.projeto.value,
+                          nomeProduto: f.nomeProduto.value, codigoProduto: f.codigoProduto.value, variacao: f.variacao.value,
+                          quantidade: parseFloat(f.quantidade.value), valorUnitario: parseFloat(f.valorUnitario.value), valorTotal: parseFloat(f.valorTotal.value),
+                          descricao: f.descricao.value, 
+                          // Admin fields
+                          modalidade: f.modalidade.value, grupoDeCompra: f.grupoDeCompra.value,
+                          numRN: f.numRN.value, numOC: f.numOC.value, status: f.status.value,
+                          dataAberturaRN: f.dataAberturaRN.value, dataPrevisao: f.dataPrevisao.value,
+                          fornecedor: f.fornecedor.value,
+                          segmento: f.segmento.value // Moved to admin
                      };
                      
                      // Uploads simplificados
                      if(f.fileOrc.files[0]) {
-                         const r = ref(storage, `artifacts/${appId}/docs/${Date.now()}_orc`);
-                         await uploadBytes(r, f.fileOrc.files[0]); data.urlOrcamento = await getDownloadURL(r);
+                          const r = ref(storage, `artifacts/${appId}/docs/${Date.now()}_orc`);
+                          await uploadBytes(r, f.fileOrc.files[0]); data.urlOrcamento = await getDownloadURL(r);
                      }
                      if(f.fileNF.files[0]) {
-                         const r = ref(storage, `artifacts/${appId}/docs/${Date.now()}_nf`);
-                         await uploadBytes(r, f.fileNF.files[0]); data.urlNotaFiscal = await getDownloadURL(r);
+                          const r = ref(storage, `artifacts/${appId}/docs/${Date.now()}_nf`);
+                          await uploadBytes(r, f.fileNF.files[0]); data.urlNotaFiscal = await getDownloadURL(r);
                      }
 
                      if(f.dataset.id) {
-                         await updateDoc(doc(db, `artifacts/${appId}/public/data/pedidos`, f.dataset.id), data);
-                         showNotification("Pedido atualizado!", "success");
+                          await updateDoc(doc(db, `artifacts/${appId}/public/data/pedidos`, f.dataset.id), data);
+                          showNotification("Pedido atualizado!", "success");
                      } else {
-                         data.dataSolicitacao = Timestamp.now();
-                         data.solicitanteId = currentUser.uid;
-                         data.solicitanteEmail = currentUser.email;
-                         data.solicitanteNome = currentUserProfile.nome;
-                         await addDoc(collection(db, `artifacts/${appId}/public/data/pedidos`), data);
-                         showNotification("Pedido criado!", "success");
+                          data.dataSolicitacao = Timestamp.now();
+                          data.solicitanteId = currentUser.uid;
+                          data.solicitanteEmail = currentUser.email;
+                          data.solicitanteNome = currentUserProfile.nome;
+                          await addDoc(collection(db, `artifacts/${appId}/public/data/pedidos`), data);
+                          showNotification("Pedido criado!", "success");
                      }
                      window.closePedidoModal();
                  } catch(err){ console.error(err); showNotification("Erro ao salvar.", "error"); }
@@ -1640,30 +1851,30 @@
                  
                  try {
                      const data = {
-                         modalidade: 'Serviço', // Fixo
-                         unidade: f.unidade.value,
-                         cr: f.cr.value,
-                         projeto: f.projeto.value,
-                         nomeProduto: f.descricao.value, // Mapeia Descrição para NomeProduto
-                         dataPrevisao: f.dataPrevisao.value,
-                         fornecedor: f.fornecedor.value,
-                         
-                         // Default/Hidden
-                         status: 'a-abrir-rn',
-                         nomeDemandante: currentUserProfile.nome,
-                         solicitanteId: currentUser.uid,
-                         solicitanteEmail: currentUser.email,
-                         solicitanteNome: currentUserProfile.nome,
-                         dataSolicitacao: Timestamp.now(),
-                         grupoDeCompra: 'Serviços', // Default group
-                         quantidade: 1, // Default
-                         valorUnitario: 0, // Default 
-                         valorTotal: 0 // Default
+                          modalidade: 'Serviço', // Fixo
+                          unidade: f.unidade.value,
+                          cr: f.cr.value,
+                          projeto: f.projeto.value,
+                          nomeProduto: f.descricao.value, // Mapeia Descrição para NomeProduto
+                          dataPrevisao: f.dataPrevisao.value,
+                          fornecedor: f.fornecedor.value,
+                          
+                          // Default/Hidden
+                          status: 'a-abrir-rn',
+                          nomeDemandante: currentUserProfile.nome,
+                          solicitanteId: currentUser.uid,
+                          solicitanteEmail: currentUser.email,
+                          solicitanteNome: currentUserProfile.nome,
+                          dataSolicitacao: Timestamp.now(),
+                          grupoDeCompra: 'Serviços', // Default group
+                          quantidade: 1, // Default
+                          valorUnitario: 0, // Default 
+                          valorTotal: 0 // Default
                      };
                      
                      if(f.fileOrc.files[0]) {
-                         const r = ref(storage, `artifacts/${appId}/docs/${Date.now()}_orc_servico`);
-                         await uploadBytes(r, f.fileOrc.files[0]); data.urlOrcamento = await getDownloadURL(r);
+                          const r = ref(storage, `artifacts/${appId}/docs/${Date.now()}_orc_servico`);
+                          await uploadBytes(r, f.fileOrc.files[0]); data.urlOrcamento = await getDownloadURL(r);
                      }
                      
                      await addDoc(collection(db, `artifacts/${appId}/public/data/pedidos`), data);
@@ -1681,30 +1892,30 @@
                  const f = e.target;
                  const docId = f.dataset.id;
                  const data = {
-                     empresa: f.empresa.value,
-                     filial: f.filial.value,
-                     cnpj: f.cnpj.value,
-                     ie: f.ie.value,
-                     telefone: f.telefone.value,
-                     endereco: f.endereco.value,
-                     numero: f.numero.value,
-                     bairro: f.bairro.value,
-                     complemento: f.complemento.value,
-                     cep: f.cep.value,
-                     contato: f.contato.value,
-                     municipio: f.municipio.value,
-                     email: f.email.value
+                      empresa: f.empresa.value,
+                      filial: f.filial.value,
+                      cnpj: f.cnpj.value,
+                      ie: f.ie.value,
+                      telefone: f.telefone.value,
+                      endereco: f.endereco.value,
+                      numero: f.numero.value,
+                      bairro: f.bairro.value,
+                      complemento: f.complemento.value,
+                      cep: f.cep.value,
+                      contato: f.contato.value,
+                      municipio: f.municipio.value,
+                      email: f.email.value
                  };
                  
                  try {
                      if (docId) {
-                         // Edição
-                         await updateDoc(doc(db, `artifacts/${appId}/public/data/unidades`, docId), data);
-                         showNotification("Unidade atualizada!", "success");
+                          // Edição
+                          await updateDoc(doc(db, `artifacts/${appId}/public/data/unidades`, docId), data);
+                          showNotification("Unidade atualizada!", "success");
                      } else {
-                         // Criação
-                         await addDoc(collection(db, `artifacts/${appId}/public/data/unidades`), data);
-                         showNotification("Unidade cadastrada!", "success");
+                          // Criação
+                          await addDoc(collection(db, `artifacts/${appId}/public/data/unidades`), data);
+                          showNotification("Unidade cadastrada!", "success");
                      }
                      f.reset(); closeUnidadeModal();
                  } catch(err){ console.error(err); showNotification("Erro ao salvar unidade.", "error"); }
@@ -1712,23 +1923,31 @@
 
 
              // Calc Total
+             // Adicionado check de existência para evitar o erro de null
+             const qtdInput = document.getElementById('inp-qtd');
+             const valInput = document.getElementById('inp-val');
+             const totInput = document.getElementById('inp-tot');
+             
              const calc = () => {
-                 const q = parseFloat(document.getElementById('inp-qtd').value)||0;
-                 const v = parseFloat(document.getElementById('inp-val').value)||0;
-                 document.getElementById('inp-tot').value = (q*v).toFixed(2);
+                 const q = parseFloat(qtdInput.value)||0;
+                 const v = parseFloat(valInput.value)||0;
+                 totInput.value = (q*v).toFixed(2);
              };
-             document.getElementById('inp-qtd').addEventListener('input', calc);
-             document.getElementById('inp-val').addEventListener('input', calc);
+             
+             if (qtdInput && valInput && totInput) {
+                qtdInput.addEventListener('input', calc);
+                valInput.addEventListener('input', calc);
+             }
              
              // Search Product
              document.getElementById('inp-search').addEventListener('keyup', e => {
                  clearTimeout(searchDebounceTimer);
                  if(e.target.value.length < 3) { document.getElementById('pedido-results').innerHTML=''; return; }
                  searchDebounceTimer = setTimeout(async () => {
-                     const q = query(collection(db, `artifacts/${appId}/public/data/produtos`), where('searchKey', '>=', e.target.value.toLowerCase()), where('searchKey', '<=', e.target.value.toLowerCase()+'\uf8ff'), limit(5));
-                     const snap = await getDocs(q);
-                     const div = document.getElementById('pedido-results'); div.innerHTML = '';
-                     snap.forEach(d => { const p=d.data(); div.innerHTML += `<div class="p-2 hover:bg-gray-100 cursor-pointer text-xs border-b" onclick="selectProduct('${p.produtoNome}','${p.variacao}','${p.grupoCompras}','${p.produtoCod}')">${p.produtoNome} - ${p.variacao}</div>`; });
+                      const q = query(collection(db, `artifacts/${appId}/public/data/produtos`), where('searchKey', '>=', e.target.value.toLowerCase()), where('searchKey', '<=', e.target.value.toLowerCase()+'\uf8ff'), limit(5));
+                      const snap = await getDocs(q);
+                      const div = document.getElementById('pedido-results'); div.innerHTML = '';
+                      snap.forEach(d => { const p=d.data(); div.innerHTML += `<div class="p-2 hover:bg-gray-100 cursor-pointer text-xs border-b" onclick="selectProduct('${p.produtoNome}','${p.variacao}','${p.grupoCompras}','${p.produtoCod}')">${p.produtoNome} - ${p.variacao}</div>`; });
                  }, 300);
              });
 
@@ -1741,42 +1960,42 @@
                  
                  // If creating a new user (UID is empty/auto-generated placeholder)
                  if(!uid) {
-                    const pwd = f.password.value;
-                    if(!pwd) return showNotification("Senha obrigatória para novos usuários", "error");
-                    if(pwd.length < 6) return showNotification("A senha deve ter pelo menos 6 caracteres", "error");
-                    
-                    let secondaryApp;
-                    try {
-                        // Initialize secondary app with unique name to avoid conflict
-                        secondaryApp = initializeApp(firebaseConfig, `Secondary_${Date.now()}`);
-                        const secondaryAuth = getAuth(secondaryApp);
-                        
-                        // Create user
-                        const userCred = await createUserWithEmailAndPassword(secondaryAuth, f.email.value, pwd);
-                        const newUid = userCred.user.uid;
-                        
-                        // Save to Firestore
-                        await setDoc(doc(db, `artifacts/${appId}/public/data/user_profiles`, newUid), {
-                             nome: f.nome.value, email: f.email.value, perfil: f.perfil.value, unidade: f.unidade.value
-                        });
-                        
-                        showNotification("Novo usuário criado com sucesso!", "success");
-                        f.reset();
-                        f.uid.placeholder = "(Gerado automaticamente)";
-                    } catch(err) {
-                        console.error(err);
-                        showNotification("Erro ao criar usuário: " + err.message, "error");
-                    } finally {
-                        // Ensure secondary app is deleted even if creation fails
-                        if(secondaryApp) await deleteApp(secondaryApp);
-                    }
+                     const pwd = f.password.value;
+                     if(!pwd) return showNotification("Senha obrigatória para novos usuários", "error");
+                     if(pwd.length < 6) return showNotification("A senha deve ter pelo menos 6 caracteres", "error");
+                     
+                     let secondaryApp;
+                     try {
+                          // Initialize secondary app with unique name to avoid conflict
+                          secondaryApp = initializeApp(firebaseConfig, `Secondary_${Date.now()}`);
+                          const secondaryAuth = getAuth(secondaryApp);
+                          
+                          // Create user
+                          const userCred = await createUserWithEmailAndPassword(secondaryAuth, f.email.value, pwd);
+                          const newUid = userCred.user.uid;
+                          
+                          // Save to Firestore
+                          await setDoc(doc(db, `artifacts/${appId}/public/data/user_profiles`, newUid), {
+                               nome: f.nome.value, email: f.email.value, perfil: f.perfil.value, unidade: f.unidade.value
+                          });
+                          
+                          showNotification("Novo usuário criado com sucesso!", "success");
+                          f.reset();
+                          f.uid.placeholder = "(Gerado automaticamente)";
+                     } catch(err) {
+                          console.error(err);
+                          showNotification("Erro ao criar usuário: " + err.message, "error");
+                     } finally {
+                          // Ensure secondary app is deleted even if creation fails
+                          if(secondaryApp) await deleteApp(secondaryApp);
+                     }
                  } else {
                      // Existing user (Editing)
                      try {
-                         await setDoc(doc(db, `artifacts/${appId}/public/data/user_profiles`, uid), {
-                             nome: f.nome.value, email: f.email.value, perfil: f.perfil.value, unidade: f.unidade.value
-                         }, {merge: true});
-                         showNotification("Usuário salvo.", "success");
+                          await setDoc(doc(db, `artifacts/${appId}/public/data/user_profiles`, uid), {
+                               nome: f.nome.value, email: f.email.value, perfil: f.perfil.value, unidade: f.unidade.value
+                          }, {merge: true});
+                          showNotification("Usuário salvo.", "success");
                      } catch(err){ showNotification("Erro ao salvar usuário.", "error"); }
                  }
              });
@@ -1787,19 +2006,19 @@
                  // Get selected roles
                  const allowedProfiles = [];
                  document.querySelectorAll('input[name="linkAccess"]:checked').forEach(cb => {
-                     allowedProfiles.push(cb.value);
+                      allowedProfiles.push(cb.value);
                  });
                  
                  try {
-                     await addDoc(collection(db, `artifacts/${appId}/public/data/links_externos`), {
-                         nome: e.target.nome.value, 
-                         url: e.target.url.value,
-                         allowedProfiles: allowedProfiles
-                     });
-                     showNotification("Link criado.", "success"); 
-                     e.target.reset();
-                     // Reset checkboxes
-                     document.querySelectorAll('input[name="linkAccess"]').forEach(cb => cb.checked = false);
+                      await addDoc(collection(db, `artifacts/${appId}/public/data/links_externos`), {
+                          nome: e.target.nome.value, 
+                          url: e.target.url.value,
+                          allowedProfiles: allowedProfiles
+                      });
+                      showNotification("Link criado.", "success"); 
+                      e.target.reset();
+                      // Reset checkboxes
+                      document.querySelectorAll('input[name="linkAccess"]').forEach(cb => cb.checked = false);
                  } catch(err){ showNotification("Erro ao criar link.", "error"); }
              });
 
@@ -1811,11 +2030,11 @@
                  e.preventDefault();
                  const f = e.target;
                  try {
-                     await addDoc(collection(db, `artifacts/${appId}/public/data/fornecedores`), {
-                         nome: f.nome.value, cnpj: f.cnpj.value, email: f.email.value, telefone: f.telefone.value, endereco: f.endereco.value
-                     });
-                     showNotification("Fornecedor cadastrado!", "success");
-                     f.reset(); document.getElementById('modal-fornecedor').classList.add('hidden');
+                      await addDoc(collection(db, `artifacts/${appId}/public/data/fornecedores`), {
+                          nome: f.nome.value, cnpj: f.cnpj.value, email: f.email.value, telefone: f.telefone.value, endereco: f.endereco.value
+                      });
+                      showNotification("Fornecedor cadastrado!", "success");
+                      f.reset(); document.getElementById('modal-fornecedor').classList.add('hidden');
                  } catch(err){ showNotification("Erro ao cadastrar fornecedor.", "error"); }
              });
 
@@ -1826,57 +2045,73 @@
                  const target = f.dataset.target;
                  const isGroup = f.dataset.isgroup === 'true';
                  const file = document.getElementById('file-nf-upload').files[0];
+                 const isAquisicoes = currentUserProfile.perfil === 'Aquisicoes' || currentUserProfile.perfil === 'Admin';
 
-                 if (!file) return showNotification("Selecione um arquivo de NF.", "error");
+
+                 if (!file && !isAquisicoes && !f.urlNotaFiscal) {
+                      return showNotification("Selecione um arquivo de NF.", "error");
+                 }
                  
                  const btn = f.querySelector('button[type="submit"]');
                  btn.disabled = true; btn.textContent = "...";
 
                  try {
-                     // Upload
-                     const storageRef = ref(storage, `artifacts/${appId}/nfs/${Date.now()}_${file.name}`);
-                     await uploadBytes(storageRef, file);
-                     const url = await getDownloadURL(storageRef);
-                     
-                     const batch = writeBatch(db);
-                     
-                     // Dados automáticos de recebimento
-                     const updateData = {
-                         urlNotaFiscal: url,
-                         status: 'entregue', // Automático
-                         recebedor: currentUserProfile.nome, // Quem recebeu
-                         dataRecebimento: Timestamp.now()
-                     };
-                     
-                     // Dados financeiros (se visível, ou seja, se for Aquisições/Admin)
-                     if (document.getElementById('nf-admin-fields').classList.contains('hidden') === false) {
-                         updateData.fin = f.fin.value;
-                         updateData.dataEmissao = f.dataEmissao.value;
-                         updateData.dataVcto = f.dataVcto.value;
-                         updateData.modalidadeNF = f.modalidadeNF.value;
-                     }
+                      let url = '';
+                      // Só faz upload se houver um arquivo
+                      if (file) {
+                          const storageRef = ref(storage, `artifacts/${appId}/nfs/${Date.now()}_${file.name}`);
+                          await uploadBytes(storageRef, file);
+                          url = await getDownloadURL(storageRef);
+                      }
+                      
+                      const batch = writeBatch(db);
+                      
+                      // Dados base para recebimento
+                      const updateData = {
+                          status: 'entregue', // Automático
+                          recebedor: currentUserProfile.nome, // Quem recebeu
+                          dataRecebimento: Timestamp.now()
+                      };
 
-                     if (isGroup) {
-                         // Update all items in RN
-                         const q = query(collection(db, `artifacts/${appId}/public/data/pedidos`), where("numRN", "==", target));
-                         const snap = await getDocs(q);
-                         snap.forEach(d => {
-                             batch.update(d.ref, updateData);
-                         });
-                     } else {
-                         // Update single item
-                         const docRef = doc(db, `artifacts/${appId}/public/data/pedidos`, target);
-                         batch.update(docRef, updateData);
-                     }
-                     
-                     await batch.commit();
-                     showNotification("NF anexada e itens marcados como Entregue!", "success");
-                     window.closeNFModal();
+                      if (url) {
+                          updateData.urlNotaFiscal = url;
+                      }
+                      
+                      // Dados financeiros (Apenas se for Gestor/Admin)
+                      if (isAquisicoes) {
+                          updateData.fin = f.fin.value || deleteField();
+                          updateData.dataEmissao = f.dataEmissao.value || deleteField();
+                          updateData.dataVcto = f.dataVcto.value || deleteField();
+                          updateData.modalidadeNF = f.modalidadeNF.value || deleteField();
+                      } else {
+                           // Se for recebedor, apaga dados financeiros se houver para evitar sobrescrita indesejada
+                           updateData.fin = deleteField();
+                           updateData.dataEmissao = deleteField();
+                           updateData.dataVcto = deleteField();
+                           updateData.modalidadeNF = deleteField();
+                      }
+
+                      if (isGroup) {
+                          // Update all items in RN
+                          const q = query(collection(db, `artifacts/${appId}/public/data/pedidos`), where("numRN", "==", target));
+                          const snap = await getDocs(q);
+                          snap.forEach(d => {
+                              batch.update(d.ref, updateData);
+                          });
+                      } else {
+                          // Update single item
+                          const docRef = doc(db, `artifacts/${appId}/public/data/pedidos`, target);
+                          batch.update(docRef, updateData);
+                      }
+                      
+                      await batch.commit();
+                      showNotification("NF anexada/atualizada!", "success");
+                      window.closeNFModal();
                  } catch(err) {
-                     console.error(err);
-                     showNotification("Erro ao anexar NF.", "error");
+                      console.error(err);
+                      showNotification("Erro ao anexar/atualizar NF.", "error");
                  } finally {
-                     btn.disabled = false; btn.textContent = "Confirmar Recebimento";
+                      btn.disabled = false; btn.textContent = "Confirmar Recebimento";
                  }
              });
              
@@ -1890,17 +2125,19 @@
              document.getElementById('btn-bulk-rn').addEventListener('click', () => document.getElementById('modal-agrupar').classList.remove('hidden'));
              document.getElementById('form-agrupar').addEventListener('submit', async e => {
                  e.preventDefault();
-                 const rn = e.target.numRN.value; 
-                 const oc = e.target.numOC.value; // NOVO: Pega a OC
+                 const rn = e.target.numRN.value.trim(); 
+                 const oc = e.target.numOC.value.trim();
                  const dt = e.target.dataAberturaRN.value;
-                 if(!rn) return;
+
+                 // Se a RN for vazia, usamos o status 'a-inserir-rn' (mantendo a lógica visual do status)
+                 const statusToSet = rn ? 'em-cotacao' : 'a-abrir-rn';
                  
                  const batch = writeBatch(db);
                  state.selectedPedidos.forEach(id => batch.update(doc(db, `artifacts/${appId}/public/data/pedidos`, id), { 
-                     numRN: rn, 
-                     numOC: oc, // NOVO: Salva a OC
-                     dataAberturaRN: dt, 
-                     status: 'em-cotacao' 
+                     numRN: rn || deleteField(), // Salva ou remove campo
+                     numOC: oc || deleteField(),
+                     dataAberturaRN: dt || deleteField(),
+                     status: statusToSet 
                  }));
                  await batch.commit();
                  showNotification("Agrupamento realizado!", "success");
@@ -1911,7 +2148,7 @@
              // NEW: Bulk Ficha Cotação from selected items
              document.getElementById('btn-bulk-ficha').addEventListener('click', () => {
                  if (state.selectedPedidos.length > 0) {
-                     // Passa a lista de IDs separados por vírgula. A lógica dentro de openCotacaoModal/generateCotacaoFicha tratará isso.
+                     // Passa a lista de IDs separados por vírgula. isGroup=false para ser tratado como lote de IDs
                      window.openCotacaoModal(state.selectedPedidos.join(','), false); 
                  }
              });
@@ -1957,7 +2194,7 @@
             <nav class="flex-1 px-3 py-6 space-y-1 overflow-y-auto">
                 <div class="text-xs font-semibold text-primary-400 uppercase tracking-wider mb-2 px-3">Menu Principal</div>
                 <button data-page="dashboard" class="nav-item w-full group flex items-center px-3 py-2.5 text-sm font-medium rounded-md transition-colors text-primary-100 hover:bg-primary-800 hover:text-white">
-                    <svg class="mr-3 h-5 w-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" /></svg>
+                    <svg class="mr-3 h-5 w-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" /></svg>
                     Dashboard
                 </button>
                 
@@ -1982,13 +2219,13 @@
                 <!-- Item Fornecedores -->
                 <button id="nav-fornecedores-item" data-page="fornecedores" class="nav-item w-full group flex items-center px-3 py-2.5 text-sm font-medium rounded-md transition-colors text-primary-100 hover:bg-primary-800 hover:text-white hidden">
                     <svg class="mr-3 h-5 w-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" /></svg>
-                    Fornecedores
+                    Cadastro de Fornecedores
                 </button>
                 
                 <!-- NOVO: Gestão de Unidade -->
                 <button id="nav-unidades-item" data-page="gestao-unidades" class="nav-item w-full group flex items-center px-3 py-2.5 text-sm font-medium rounded-md transition-colors text-primary-100 hover:bg-primary-800 hover:text-white hidden">
                     <svg class="mr-3 h-5 w-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" /></svg>
-                    Gestão de Unidade
+                    Cadastro de Unidades
                 </button>
 
                 <div id="nav-admin" class="hidden pt-4">
@@ -2118,7 +2355,7 @@
                     <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
                         <h2 id="servicos-title" class="text-2xl font-bold text-gray-900">Gestão de Serviços</h2>
                         <button onclick="openServicoModal()" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700 focus:outline-none">
-                            <svg class="-ml-1 mr-2 h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" /></svg>
+                            <svg class="-ml-1 mr-2 h-5 w-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" /></svg>
                             Solicitar Serviço
                         </button>
                     </div>
@@ -2159,13 +2396,13 @@
                             <table class="min-w-full divide-y divide-gray-200">
                                 <thead class="bg-gray-50">
                                     <tr>
-                                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">OC / Ref</th>
-                                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Descrição</th>
-                                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Fornecedor</th>
-                                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Valor</th>
-                                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status Atual</th>
-                                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">FIN / Vcto</th>
-                                            <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Ação</th>
+                                             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">OC / Ref</th>
+                                             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Descrição</th>
+                                             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Fornecedor</th>
+                                             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Valor</th>
+                                             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status Atual</th>
+                                             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">FIN / Vcto</th>
+                                             <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Ação</th>
                                     </tr>
                                 </thead>
                                 <tbody id="tabela-nf-body" class="bg-white divide-y divide-gray-200"></tbody>
@@ -2177,7 +2414,7 @@
                 <!-- FORNECEDORES PAGE -->
                 <div id="fornecedores" class="page-content hidden w-full">
                     <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
-                        <h2 class="text-2xl font-bold text-gray-900">Gestão de Fornecedores</h2>
+                        <h2 class="text-2xl font-bold text-gray-900">Cadastro de Fornecedores</h2>
                         <button id="btn-novo-fornecedor" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700 focus:outline-none">
                             <svg class="-ml-1 mr-2 h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" /></svg>
                             Novo Fornecedor
@@ -2189,12 +2426,12 @@
                             <table class="min-w-full divide-y divide-gray-200">
                                 <thead class="bg-gray-50">
                                     <tr>
-                                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Nome / Razão Social</th>
-                                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">CNPJ</th>
-                                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">E-mail</th>
-                                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Telefone</th>
-                                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Endereço</th>
-                                            <th class="px-4 py-3"></th>
+                                             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Nome / Razão Social</th>
+                                             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">CNPJ</th>
+                                             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">E-mail</th>
+                                             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Telefone</th>
+                                             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Endereço</th>
+                                             <th class="px-4 py-3"></th>
                                     </tr>
                                 </thead>
                                 <tbody id="tabela-fornecedores-body" class="bg-white divide-y divide-gray-200"></tbody>
@@ -2206,7 +2443,7 @@
                 <!-- UNIDADES PAGE (NOVO) -->
                 <div id="gestao-unidades" class="page-content hidden w-full">
                     <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
-                        <h2 class="text-2xl font-bold text-gray-900">Gestão de Unidades</h2>
+                        <h2 class="text-2xl font-bold text-gray-900">Cadastro de Unidades</h2>
                         <button id="btn-nova-unidade" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700 focus:outline-none">
                             <svg class="-ml-1 mr-2 h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" /></svg>
                             Nova Unidade
@@ -2218,11 +2455,11 @@
                             <table class="min-w-full divide-y divide-gray-200">
                                 <thead class="bg-gray-50">
                                     <tr>
-                                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Empresa</th>
-                                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Filial</th>
-                                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Município</th>
-                                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">CNPJ</th>
-                                            <th class="px-4 py-3"></th>
+                                             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Empresa</th>
+                                             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Filial</th>
+                                             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Município</th>
+                                             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">CNPJ</th>
+                                             <th class="px-4 py-3"></th>
                                     </tr>
                                 </thead>
                                 <tbody id="tabela-unidades-body" class="bg-white divide-y divide-gray-200"></tbody>
@@ -2520,24 +2757,24 @@
                          <h4 class="text-xs font-bold text-gray-500 uppercase tracking-wider">Dados Financeiros (NF)</h4>
                          <div class="grid grid-cols-2 gap-4">
                              <div>
-                                <label class="block text-xs font-medium text-gray-700 mb-1">FIN</label>
-                                <input name="fin" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                            </div>
+                                 <label class="block text-xs font-medium text-gray-700 mb-1">FIN</label>
+                                 <input name="fin" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                             </div>
                              <div>
-                                <label class="block text-xs font-medium text-gray-700 mb-1">Modalidade NF</label>
-                                <select name="modalidadeNF" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-white">
-                                    <option value="Produto">Produto</option>
-                                    <option value="Serviço">Serviço</option>
-                                </select>
-                            </div>
-                            <div>
-                                <label class="block text-xs font-medium text-gray-700 mb-1">Data Emissão NF</label>
-                                <input name="dataEmissao" type="date" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                            </div>
-                            <div>
-                                <label class="block text-xs font-medium text-gray-700 mb-1">Data Vcto</label>
-                                <input name="dataVcto" type="date" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                            </div>
+                                 <label class="block text-xs font-medium text-gray-700 mb-1">Modalidade NF</label>
+                                 <select name="modalidadeNF" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-white">
+                                     <option value="Produto">Produto</option>
+                                     <option value="Serviço">Serviço</option>
+                                 </select>
+                             </div>
+                             <div>
+                                 <label class="block text-xs font-medium text-gray-700 mb-1">Data Emissão NF</label>
+                                 <input name="dataEmissao" type="date" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                             </div>
+                             <div>
+                                 <label class="block text-xs font-medium text-gray-700 mb-1">Data Vcto</label>
+                                 <input name="dataVcto" type="date" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                             </div>
                          </div>
                     </div>
                     
@@ -2567,8 +2804,8 @@
                         <select id="select-unidade-cotacao" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border"></select>
                     </div>
                     <div class="flex justify-end gap-2 pt-2">
-                         <button type="button" onclick="closeCotacaoModal()" class="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50">Cancelar</button>
-                         <button type="button" id="btn-gerar-ficha" onclick="generateCotacaoFicha()" class="px-4 py-2 bg-green-600 text-white rounded-md text-sm font-medium hover:bg-green-700 shadow-sm">Gerar Documento</button>
+                        <button type="button" onclick="closeCotacaoModal()" class="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50">Cancelar</button>
+                        <button type="button" id="btn-gerar-ficha" onclick="generateCotacaoFicha()" class="px-4 py-2 bg-green-600 text-white rounded-md text-sm font-medium hover:bg-green-700 shadow-sm">Gerar Documento</button>
                     </div>
                 </div>
             </div>
@@ -2621,10 +2858,16 @@
                 <div class="relative transform overflow-hidden rounded-lg bg-white text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-4xl">
                     <form id="form-pedido" class="flex flex-col h-full">
                         <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-                            <h3 class="text-lg font-bold leading-6 text-gray-900 mb-4 flex items-center gap-2">
-                                <svg class="h-6 w-6 text-primary-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-                                Detalhes da Solicitação
-                            </h3>
+                            <div class="flex items-center justify-between mb-4 border-b pb-2">
+                                <h3 class="text-lg font-bold leading-6 text-gray-900 flex items-center gap-2">
+                                    <svg class="h-6 w-6 text-primary-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                                    Detalhes da Solicitação
+                                </h3>
+                                <button type="button" id="btn-return-group" onclick="returnToGroupModal()" class="hidden text-sm text-gray-500 hover:text-gray-700 flex items-center gap-1">
+                                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 15l-3-3m0 0l3-3m-3 3h8M3 12a9 9 0 1118 0 9 9 0 01-18 0z" /></svg>
+                                    Voltar para o Grupo
+                                </button>
+                            </div>
                             
                             <div class="grid grid-cols-12 gap-4">
                                 <!-- Search -->
@@ -2738,11 +2981,11 @@
                                         <input list="fornecedores-datalist" name="fornecedor" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-white" placeholder="Digite para buscar...">
                                         <datalist id="fornecedores-datalist"></datalist>
                                     </div>
-                                     <!-- SEGMENTO -->
-                                     <div class="col-span-6">
-                                        <label class="block text-xs font-medium text-gray-500 mb-1">Segmento</label>
-                                        <input name="segmento" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-white">
-                                     </div>
+                                      <!-- SEGMENTO -->
+                                      <div class="col-span-6">
+                                          <label class="block text-xs font-medium text-gray-500 mb-1">Segmento</label>
+                                          <input name="segmento" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-white">
+                                        </div>
                                 </div>
                             </div>
                         </div>
@@ -2763,7 +3006,7 @@
             <div class="flex min-h-full items-center justify-center p-4">
                 <div class="bg-white rounded-lg shadow-xl w-full max-w-3xl p-6">
                     <div class="flex justify-between items-center mb-6 border-b pb-4">
-                        <h3 class="text-xl font-bold text-gray-900" id="group-modal-title">Gerir RN</h3>
+                        <h3 class="text-xl font-bold text-gray-900" id="group-modal-title">Gerir Agrupamento</h3>
                         <button onclick="closeGroupModal()" class="text-gray-400 hover:text-gray-500">
                             <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
                         </button>
@@ -2818,7 +3061,7 @@
                             <tbody id="group-items-body" class="bg-white divide-y divide-gray-200"></tbody>
                             <tfoot class="bg-gray-50">
                                 <tr>
-                                    <td colspan="2" class="px-4 py-2 text-right font-bold text-gray-700">Total da RN:</td>
+                                    <td colspan="2" class="px-4 py-2 text-right font-bold text-gray-700">Total do Agrupamento:</td>
                                     <td class="px-4 py-2 text-right font-bold text-primary-700" id="group-total-display">R$ 0.00</td>
                                     <td></td>
                                 </tr>
@@ -2828,8 +3071,8 @@
                     <div class="flex justify-end pt-4">
                          <button id="btn-group-ficha-cotacao" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none">
                             <svg class="mr-2 -ml-1 h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-                            Gerar Ficha Cotação (RN)
-                        </button>
+                            Gerar Ficha Cotação (Agrup.)
+                         </button>
                     </div>
                 </div>
             </div>
@@ -2844,17 +3087,17 @@
                 <h3 class="font-bold text-lg mb-4 text-gray-900">Vincular Seleção à RN</h3>
                 <form id="form-agrupar" class="space-y-4">
                     <div>
-                        <label class="block text-sm font-medium text-gray-700">Número da RN</label>
-                        <input name="numRN" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                        <label class="block text-sm font-medium text-gray-700">Número da RN (Opcional)</label>
+                        <input name="numRN" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border" placeholder="Deixe vazio para marcar como pendente">
                     </div>
                     <!-- ADDED OC FIELD -->
                     <div>
-                        <label class="block text-sm font-medium text-gray-700">Número da OC</label>
+                        <label class="block text-sm font-medium text-gray-700">Número da OC (Opcional)</label>
                         <input name="numOC" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
                     </div>
                     <div>
-                        <label class="block text-sm font-medium text-gray-700">Data de Abertura</label>
-                        <input name="dataAberturaRN" type="date" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                        <label class="block text-sm font-medium text-gray-700">Data de Abertura (Opcional)</label>
+                        <input name="dataAberturaRN" type="date" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
                     </div>
                     <div class="flex justify-end gap-2 pt-2">
                          <button type="button" onclick="document.getElementById('modal-agrupar').classList.add('hidden')" class="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50">Cancelar</button>
