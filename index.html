@@ -895,6 +895,9 @@
                 const tr = document.createElement('tr');
                 tr.className = "hover:bg-gray-50 border-b border-gray-100";
                 
+                // Define targetId for current item scope (FIX for ReferenceError)
+                const targetId = item.isGroup ? item.numRN : item.id;
+
                 // Visual Indicator for Has NF
                 const nfIcon = item.hasNF ? 
                     `<span class="ml-2 text-green-600" title="NF Anexada"><svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg></span>` : '';
@@ -904,7 +907,6 @@
                 let vctoDisplay = '';
                 
                 if (isGestor || isRecebedor) { // Ações Gestor/Recebedor
-                    const targetId = item.isGroup ? item.numRN : item.id;
                     
                     if (item.hasNF) {
                         const fin = item.fin || '---';
@@ -925,6 +927,11 @@
                                 <button onclick="openNFModal('${targetId}', ${item.isGroup})" class="text-primary-600 hover:text-primary-800" title="${isGestor ? 'Editar NF e Dados Financeiros' : 'Anexar/Atualizar NF'}">
                                     <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
                                 </button>
+                                ${isGestor ? `
+                                    <button onclick="deleteNFItem('${item.id}', false)" class="text-red-600 hover:text-red-800" title="Excluir Item de Pedido">
+                                        <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                                    </button>
+                                ` : ''}
                             </div>
                         `;
                     } else {
@@ -935,6 +942,11 @@
                                 <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
                                 Anexar NF
                             </button>
+                            ${isGestor ? `
+                                <button onclick="deleteNFItem('${item.id}', false)" class="text-red-600 hover:text-red-800 ml-2" title="Excluir Item de Pedido">
+                                    <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                                </button>
+                            ` : ''}
                         `;
                     }
                 } else {
@@ -956,9 +968,12 @@
                        if (isGestor) {
                            groupActionHtml = `
                                 <div class="flex justify-end gap-2">
-                                    ${item.hasNF ? `<a href="${item.nfUrl}" target="_blank" class="text-gray-700 hover:text-gray-900 px-2 py-1 rounded text-xs border border-gray-300 bg-white" title="Ver NF (Grupo)"><svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg></a>` : ''}
+                                    ${item.hasNF ? `<a href="${item.nfUrl}" target="_blank" class="text-gray-700 hover:text-gray-900 px-2 py-1 rounded text-xs border border-gray-300 bg-white" title="Ver NF (Grupo)">Ver NF</a>` : ''}
                                     <button onclick="openNFModal('${item.numRN}', true)" class="text-primary-600 hover:text-primary-800" title="Editar Dados Financeiros/NF (Grupo)">
                                         <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+                                    </button>
+                                    <button onclick="deleteNFItem('${targetId}', true)" class="text-red-600 hover:text-red-800" title="Excluir Agrupamento (Itens)">
+                                        <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
                                     </button>
                                 </div>
                            `;
@@ -969,9 +984,11 @@
                                </button>
                            `;
                        } else {
-                            // Para Solicitante
+                            // Para Solicitante (Apenas ver NF se existir)
                             groupActionHtml = `
-                                ${item.hasNF ? `<a href="${item.nfUrl}" target="_blank" class="text-gray-700 hover:text-gray-900 px-2 py-1 rounded text-xs border border-gray-300 bg-white" title="Ver NF (Grupo)"><svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg></a>` : ''}
+                                <div class="flex justify-end gap-2">
+                                    ${item.hasNF ? `<a href="${item.nfUrl}" target="_blank" class="text-gray-700 hover:text-gray-900 px-2 py-1 rounded text-xs border border-gray-300 bg-white" title="Ver NF (Grupo)">Ver NF</a>` : ''}
+                                </div>
                             `;
                        }
 
@@ -985,27 +1002,10 @@
                         <td class="px-4 py-4 text-sm font-bold text-gray-900">R$ ${item.total.toFixed(2)}</td>
                         <td class="px-4 py-4"><span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${st.class}">${st.text}</span></td>
                         ${finVctoCell} 
-                        <td class="px-4 py-4 text-right">
+                        <td class="px-4 py-4 text-right flex items-center justify-end gap-2">
                             ${groupActionHtml}
-                            <button onclick="window.openGroupDetails('${item.numRN || item.items[0].id}')" class="text-primary-600 hover:text-primary-800 text-sm font-semibold ml-2">Ver Itens</button>
+                            <button onclick="window.openGroupDetails('${item.numRN || item.items[0].id}')" class="text-primary-600 hover:text-primary-800 text-sm font-semibold">Ver Itens</button>
                         </td>
-                       `;
-                } else {
-                       const st = STATUS_MAP[item.status] || { text: item.status, class: "bg-gray-100" };
-                       // MOSTRAR OC SE TIVER
-                       const ocDisplay = item.numOC ? `OC ${item.numOC}` : '---';
-                       
-                       // Se for Gestor/Admin, mostramos os dados financeiros
-                       const finVctoCell = isGestor ? `<td class="px-4 py-4 text-left">${vctoDisplay}</td>` : '';
-                       
-                       tr.innerHTML = `
-                        <td class="px-4 py-4 text-sm text-gray-500 flex items-center gap-2">${ocDisplay} ${nfIcon}</td>
-                        <td class="px-4 py-4 text-sm text-gray-900">${item.nomeProduto}</td>
-                        <td class="px-4 py-4 text-sm text-gray-900">${item.fornecedor || '-'}</td>
-                        <td class="px-4 py-4 text-sm font-medium text-gray-900">R$ ${parseFloat(item.valorTotal).toFixed(2)}</td>
-                        <td class="px-4 py-4"><span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${st.class}">${st.text}</span></td>
-                        ${finVctoCell}
-                        <td class="px-4 py-4 text-right">${actionBtn}</td>
                        `;
                 }
                 tbody.appendChild(tr);
@@ -1235,6 +1235,42 @@
                 } catch(e) { showNotification("Erro ao desvincular.", "error"); }
             });
         };
+        
+        // NOVO: Função para excluir item/agrupamento de NF (Gestor/Admin)
+        window.deleteNFItem = (idOrRN, isGroup) => {
+            const message = isGroup 
+                ? "ATENÇÃO: Você tem certeza que deseja EXCLUIR ESTE AGRUPAMENTO (RN/OC) e TODOS os pedidos vinculados? Esta ação é irreversível." 
+                : "ATENÇÃO: Você tem certeza que deseja EXCLUIR ESTE ITEM de pedido? Esta ação é irreversível.";
+            
+            showConfirmationModal(message, async () => {
+                try {
+                    let itemsToDelete = [];
+
+                    if (isGroup) {
+                        // Se for um grupo (RN/OC), busca todos os documentos com essa RN
+                        const q = query(collection(db, `artifacts/${appId}/public/data/pedidos`), where("numRN", "==", idOrRN));
+                        const snap = await getDocs(q);
+                        itemsToDelete = snap.docs.map(d => d.ref);
+                        if (itemsToDelete.length === 0) {
+                             return showNotification("Nenhum item encontrado para excluir neste grupo.", "error");
+                        }
+                    } else {
+                        // Se for um item individual
+                        itemsToDelete.push(doc(db, `artifacts/${appId}/public/data/pedidos`, idOrRN));
+                    }
+
+                    const batch = writeBatch(db);
+                    itemsToDelete.forEach(ref => batch.delete(ref));
+                    await batch.commit();
+
+                    showNotification(isGroup ? "Agrupamento e itens excluídos." : "Item excluído.", "success");
+                } catch(e) { 
+                    console.error(e);
+                    showNotification("Erro ao excluir item/agrupamento.", "error"); 
+                }
+            });
+        };
+
 
         // NOVA FUNÇÃO: SALVAR DADOS DA RN
         window.updateGroupData = async () => {
