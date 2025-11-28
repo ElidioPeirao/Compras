@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="pt-br" class="h-full bg-gray-50 antialiased">
 <head>
@@ -64,7 +65,7 @@
     <script type="module">
         import { initializeApp, deleteApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, collection, addDoc, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, onSnapshot, query, where, Timestamp, orderBy, limit, writeBatch, deleteField } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, collection, addDoc, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, onSnapshot, query, where, Timestamp, orderBy, limit, writeBatch, deleteField, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         import { getStorage, ref, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 
         const firebaseConfig = {
@@ -91,6 +92,7 @@
             app = initializeApp(firebaseConfig);
             auth = getAuth(app);
             db = getFirestore(app);
+            setLogLevel('debug'); // HABILITADO LOGGING DO FIRESTORE PARA DEBUG
             storage = getStorage(app);
             appId = firebaseConfig.appId;
         } catch (e) {
@@ -106,8 +108,10 @@
             unidades: [], // Apenas os nomes para compatibilidade (será preenchido dinamicamente)
             gruposDeCompra: [
                 "Alimentos", "Serviços", "Mobiliário", "Equip. materiais médicos e odontológicos",
-                "Materiais de Expediente", "EPI", "Limpeza", "Compra Regional", "Contrato",
-                "Requisição CD", "Fundo Rotativo", "Outros"
+                "Materiais de Expediente", "EPI", "Limpeza", 
+                "Material Didatico", "Manutenção", // NOVOS
+                "Outros"
+                // REMOVIDOS: Fundo Rotativo, Aquisição CD, Contrato, Compra Regional
             ],
             modalidadesList: [
                 "Produto", "Serviço", "Contrato", "Compra Regional", "Requisição CD", "Fundo Rotativo", "Chave Eventual", "Sede"
@@ -116,11 +120,14 @@
             produtosBuscados: [], 
             linksExternos: [], 
             selectedPedidos: [], 
-            filtros: { unidade: "", modalidade: "", status: "" }
+            filtros: { unidade: "", modalidade: "", status: "", search: "" }, // NOVO: Adicionado campo de busca
+            isSidebarOpen: true // NOVO: Estado da barra lateral
         };
 
         const STATUS_MAP = {
-            // NOVO STATUS VISUAL
+            // NOVO STATUS: ENVIADO PARA AQUISIÇÃO
+            "enviado-aquisicao": { text: "Enviado p/ Aquisição", class: "bg-blue-200 text-blue-900 ring-blue-700/20 font-bold", iconColor: "text-blue-700", bgIcon: "bg-blue-300" },
+
             "a-inserir-rn": { text: "A Inserir RN", class: "bg-yellow-100 text-yellow-900 ring-yellow-700/20 font-bold", iconColor: "text-yellow-700", bgIcon: "bg-yellow-200" },
 
             "a-abrir-rn": { text: "A Abrir RN", class: "bg-blue-50 text-blue-700 ring-blue-600/20", iconColor: "text-blue-600", bgIcon: "bg-blue-100" },
@@ -186,41 +193,87 @@
             const solText = document.getElementById('nav-solicitacoes-text');
             const servText = document.getElementById('nav-servicos-text');
             
-            // Reset
-            adminNav.classList.add('hidden');
-            fornNav.classList.add('hidden');
-            unitNav.classList.add('hidden');
-            nfNav.classList.add('hidden');
-            solNav.classList.remove('hidden'); // Default visible
-            servNav.classList.remove('hidden'); // Default visible for services
+            // Reset. Usando ?. para evitar o erro de ReferenceError
+            adminNav?.classList.add('hidden');
+            fornNav?.classList.add('hidden');
+            unitNav?.classList.add('hidden');
+            nfNav?.classList.add('hidden');
+            solNav?.classList.remove('hidden'); // Default visible
+            servNav?.classList.remove('hidden'); // Default visible for services
 
             // Lógica de Visibilidade e Nomes
             if (perfil === 'Solicitante') {
-                solText.textContent = "Solicitação de Suprimentos";
-                servText.textContent = "Solicitação de Serviços";
+                if(solText) solText.textContent = "Solicitação de Suprimentos";
+                if(servText) servText.textContent = "Solicitação de Serviços";
                 document.getElementById('servicos-title').textContent = "Meus Serviços Solicitados";
             } else {
-                solText.textContent = "Gestão de Suprimentos";
-                servText.textContent = "Gestão de Serviços";
+                if(solText) solText.textContent = "Gestão de Suprimentos";
+                if(servText) servText.textContent = "Gestão de Serviços";
                 document.getElementById('servicos-title').textContent = "Gestão de Serviços";
             }
 
             if (perfil === 'Admin') {
-                adminNav.classList.remove('hidden');
-                fornNav.classList.remove('hidden');
-                unitNav.classList.remove('hidden');
-                nfNav.classList.remove('hidden');
+                adminNav?.classList.remove('hidden');
+                fornNav?.classList.remove('hidden');
+                unitNav?.classList.remove('hidden');
+                nfNav?.classList.remove('hidden');
             } 
             else if (perfil === 'Aquisicoes') {
-                fornNav.classList.remove('hidden');
-                unitNav.classList.remove('hidden');
-                nfNav.classList.remove('hidden');
+                fornNav?.classList.remove('hidden');
+                unitNav?.classList.remove('hidden');
+                nfNav?.classList.remove('hidden');
             }
             else if (perfil === 'Recebedor') {
                 // Recebedor vê apenas Dashboard e Gestão NF
-                nfNav.classList.remove('hidden');
-                solNav.classList.add('hidden'); 
-                servNav.classList.add('hidden');
+                nfNav?.classList.remove('hidden');
+                solNav?.classList.add('hidden'); 
+                servNav?.classList.add('hidden');
+            }
+            
+            // NOVO: Adiciona listener para o botão de toggle da sidebar
+            const toggleButton = document.getElementById('sidebar-toggle-btn');
+            if (toggleButton) {
+                toggleButton.removeEventListener('click', toggleSidebar); // Evita duplicidade
+                toggleButton.addEventListener('click', toggleSidebar);
+            }
+
+            // Garante que o estado inicial da UI corresponde ao estado da variável (ml-64 se aberta)
+            const mainContent = document.getElementById('main-content-wrapper');
+            const sidebar = document.getElementById('sidebar-wrapper');
+            if (mainContent && sidebar) {
+                if (state.isSidebarOpen) {
+                    sidebar.classList.remove('w-0', 'hidden');
+                    sidebar.classList.add('w-64');
+                    mainContent.classList.remove('ml-0');
+                    mainContent.classList.add('ml-64');
+                } else {
+                    sidebar.classList.remove('w-64');
+                    sidebar.classList.add('w-0', 'hidden');
+                    mainContent.classList.remove('ml-64');
+                    mainContent.classList.add('ml-0');
+                }
+            }
+        }
+        
+        // NOVO: Função para ocultar/mostrar o menu lateral
+        window.toggleSidebar = function() {
+            state.isSidebarOpen = !state.isSidebarOpen;
+            const mainContent = document.getElementById('main-content-wrapper');
+            const sidebar = document.getElementById('sidebar-wrapper');
+            const toggleIcon = document.getElementById('sidebar-toggle-icon');
+
+            if (state.isSidebarOpen) {
+                sidebar.classList.remove('w-0', 'hidden');
+                sidebar.classList.add('w-64');
+                mainContent.classList.remove('ml-0');
+                mainContent.classList.add('ml-64');
+                if (toggleIcon) toggleIcon.innerHTML = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />`; // Ícone de fechar (esquerda)
+            } else {
+                sidebar.classList.remove('w-64');
+                sidebar.classList.add('w-0', 'hidden');
+                mainContent.classList.remove('ml-64');
+                mainContent.classList.add('ml-0');
+                if (toggleIcon) toggleIcon.innerHTML = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />`; // Ícone de abrir (direita)
             }
         }
 
@@ -266,23 +319,33 @@
             const m = document.getElementById('filter-modalidade');
             const s = document.getElementById('filter-status');
             
-            const curU = u.value; const curM = m.value; const curS = s.value;
+            const curU = u?.value || ""; 
+            const curM = m?.value || ""; 
+            const curS = s?.value || "";
 
-            u.innerHTML = '<option value="">Todas Unidades</option>';
-            // Agora usa a lista dinâmica
-            state.unidades.forEach(x => u.innerHTML += `<option value="${x}">${x}</option>`);
-            
-            m.innerHTML = '<option value="">Todas Modalidades</option>';
-            state.modalidadesList.forEach(x => m.innerHTML += `<option value="${x}">${x}</option>`);
-
-            s.innerHTML = '<option value="">Todos Status</option>';
-            // Adiciona o status de RN pendente manualmente se for gestor, pois ele não deve ser usado em pedidos normais
-            if (currentUserProfile.perfil !== 'Solicitante') {
-                s.innerHTML += `<option value="a-inserir-rn">${STATUS_MAP["a-inserir-rn"].text}</option>`;
+            if (u) {
+                u.innerHTML = '<option value="">Todas Unidades</option>';
+                // Agora usa a lista dinâmica
+                state.unidades.forEach(x => u.innerHTML += `<option value="${x}">${x}</option>`);
+                u.value = curU;
             }
-            Object.entries(STATUS_MAP).filter(([k]) => k !== 'a-inserir-rn').forEach(([k,v]) => s.innerHTML += `<option value="${k}">${v.text}</option>`);
+            
+            if (m) {
+                m.innerHTML = '<option value="">Todas Modalidades</option>';
+                state.modalidadesList.forEach(x => m.innerHTML += `<option value="${x}">${x}</option>`);
+                m.value = curM;
+            }
 
-            u.value = curU; m.value = curM; s.value = curS;
+            if (s) {
+                s.innerHTML = '<option value="">Todos Status</option>';
+                // Adiciona o status de RN pendente manualmente se for gestor, pois ele não deve ser usado em pedidos normais
+                if (currentUserProfile.perfil !== 'Solicitante') {
+                    s.innerHTML += `<option value="enviado-aquisicao">${STATUS_MAP["enviado-aquisicao"].text}</option>`;
+                    s.innerHTML += `<option value="a-inserir-rn">${STATUS_MAP["a-inserir-rn"].text}</option>`;
+                }
+                Object.entries(STATUS_MAP).filter(([k]) => k !== 'a-inserir-rn' && k !== 'enviado-aquisicao').forEach(([k,v]) => s.innerHTML += `<option value="${k}">${v.text}</option>`);
+                s.value = curS;
+            }
         }
 
         function checkIsLate(item) {
@@ -315,6 +378,7 @@
             const perfil = currentUserProfile.perfil || "Solicitante";
             const isGestor = perfil === 'Aquisicoes' || perfil === 'Admin';
             const isMain = tableId === 'tabela-pedidos-solicitacoes';
+            const searchFilter = document.getElementById('filter-search')?.value.toLowerCase() || ''; // NOVO FILTRO
 
             let list = pedidos.filter(p => {
                 // SEPARAÇÃO: A tabela de suprimentos mostra tudo MENOS Serviço
@@ -338,6 +402,16 @@
                 }
                 
                 if (state.filtros.status && pStatus !== state.filtros.status) return false;
+
+                // NOVO: Filtro de busca por RN/OC
+                if (searchFilter) {
+                    const rn = (p.numRN || '').toLowerCase();
+                    const oc = (p.numOC || '').toLowerCase();
+                    if (!rn.includes(searchFilter) && !oc.includes(searchFilter)) {
+                        return false;
+                    }
+                }
+
                 return true;
             });
 
@@ -360,13 +434,19 @@
                 // 2. Tenta agrupar por RN se houver (RNs existentes são grupos)
                 if (p.numRN && isMain) {
                     if (!rnMap.has(p.numRN)) {
-                        rnMap.set(p.numRN, { isGroup: true, numRN: p.numRN, items: [p], total: parseFloat(p.valorTotal||0), status: effectiveStatus, dateRN: p.dataAberturaRN, isPendingRN: false, id: p.numRN });
+                        rnMap.set(p.numRN, { isGroup: true, numRN: p.numRN, items: [p], total: parseFloat(p.valorTotal||0), status: effectiveStatus, dateRN: p.dataAberturaRN, isPendingRN: false, id: p.numRN, fornecedor: p.fornecedor, numOC: p.numOC, dataPrevisao: p.dataPrevisao });
                         grouped.push(rnMap.get(p.numRN));
                     } else {
                         const g = rnMap.get(p.numRN);
                         g.items.push(p);
                         g.total += parseFloat(p.valorTotal||0);
                         g.status = effectiveStatus;
+                        
+                        // Atualiza as propriedades do grupo com base no primeiro item (para exibição)
+                        if (!g.fornecedor && p.fornecedor) g.fornecedor = p.fornecedor;
+                        if (!g.numOC && p.numOC) g.numOC = p.numOC;
+                        if (!g.dataPrevisao && p.dataPrevisao) g.dataPrevisao = p.dataPrevisao;
+
                     }
                 } 
                 // 3. SE NÃO FOI AGRUPADO POR RN, TRATA COMO ITEM INDIVIDUAL (Inclui A-INSERIR-RN individualmente)
@@ -421,6 +501,13 @@
                     // O ID passado para openGroupDetails é o numRN se existir, senão, o ID do primeiro item do grupo (para ser usado no lookup)
                     // Se for PENDENTE, passamos o ID do PRIMEIRO item para que o modal saiba qual grupo temporário exibir/gerir
                     const targetId = item.numRN || item.items[0].id;
+                    
+                    // NOVO: Detalhes consolidados do grupo
+                    const units = [...new Set(item.items.map(i => i.unidade))].join(', ');
+                    let previsaoStr = item.dataPrevisao;
+                    if(previsaoStr && typeof previsaoStr === 'string' && previsaoStr.includes('-')) {
+                        previsaoStr = previsaoStr.split('-').reverse().join('/');
+                    }
 
                     tr.innerHTML = `
                         <td class="px-3 py-4 w-10"></td>
@@ -428,13 +515,15 @@
                             <div class="flex items-center gap-2 text-primary-700 font-bold">
                                 <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" /></svg>
                                 ${referenceDisplay}
+                                ${item.numOC ? `<span class="ml-1 text-xs text-gray-500 font-normal">(OC: ${item.numOC})</span>` : ''}
                             </div>
                             <div class="text-xs text-gray-500 mt-1">${dateInfo}</div>
                         </td>
-                        <td colspan="3" class="px-3 py-4 text-sm text-gray-600 italic">
-                            Grupo com <strong>${item.items.length} itens</strong> de ${[...new Set(item.items.map(i => i.unidade))].join(', ')}.
+                        <td class="px-3 py-4 text-sm text-gray-900" colspan="3">
+                            <div class="font-medium">${item.fornecedor || '---'}</div>
+                            <div class="text-xs text-gray-500">Unidades: ${units}</div>
+                            <div class="text-xs text-gray-500">Previsão: ${previsaoStr || '---'}</div>
                         </td>
-                        <td class="px-3 py-4 text-sm text-gray-400 text-center">-</td>
                         <td class="px-3 py-4 text-sm font-bold text-gray-900">R$ ${item.total.toFixed(2)}</td>
                         <td class="px-3 py-4">
                             <span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${st.class}">${st.text}</span>
@@ -792,7 +881,7 @@
             f.reset();
             
             // Sincronização de filtro: Se filtro de unidade estiver ativo, usa no modal
-            const filterU = document.getElementById('filter-unidade').value;
+            const filterU = document.getElementById('filter-unidade')?.value;
             if(filterU) {
                 f.unidade.value = filterU;
             } else {
@@ -810,6 +899,30 @@
             document.getElementById('modal-servico').classList.remove('hidden');
         };
         window.closeServicoModal = () => document.getElementById('modal-servico').classList.add('hidden');
+        
+        // NOVO: Modal para ver anexos
+        window.openAttachmentsModal = function(attachments) {
+            const modal = document.getElementById('modal-anexos');
+            const list = document.getElementById('attachments-list');
+            list.innerHTML = '';
+
+            if (attachments && attachments.length > 0) {
+                 attachments.forEach((url, index) => {
+                    const filename = url.substring(url.lastIndexOf('%2F') + 3).split('?')[0]; // Tenta extrair o nome
+                    list.innerHTML += `
+                        <a href="${url}" target="_blank" class="flex items-center justify-between p-3 border-b hover:bg-gray-50 transition-colors">
+                            <span class="text-sm text-blue-600 truncate">${filename || `Anexo ${index + 1}`}</span>
+                            <svg class="w-4 h-4 flex-shrink-0 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
+                        </a>
+                    `;
+                 });
+            } else {
+                 list.innerHTML = '<p class="text-center text-gray-500 py-4 text-sm">Nenhum arquivo anexado.</p>';
+            }
+
+            modal.classList.remove('hidden');
+        };
+        window.closeAttachmentsModal = () => document.getElementById('modal-anexos').classList.add('hidden');
 
 
         // --- GESTÃO DE NF ---
@@ -825,24 +938,21 @@
             // Ler o filtro atual
             const filterType = document.getElementById('filter-nf-status') ? document.getElementById('filter-nf-status').value : 'pendente';
 
-            // Base: Pedidos Ativos E que não estejam mais em fase de cotação/abertura de RN
-            const pedidosAtivos = state.pedidos.filter(p => 
-                p.status !== 'cancelado' && 
-                p.status !== 'a-abrir-rn' && 
-                p.status !== 'a-inserir-rn' && 
-                p.status !== 'em-cotacao'
-            );
+            // Pedidos que estão no fluxo de gestão (já passaram da fase de solicitação inicial)
+            const STATUSES_TO_TRACK = ['registrado', 'aguardando-entrega', 'entregue', 'aguardando-lancamento', 'finalizado', 'em-atraso'];
+            const pedidosAtivos = state.pedidos.filter(p => STATUSES_TO_TRACK.includes(p.status));
+
 
             // Aplicar filtro da aba
             let pedidosFiltrados = pedidosAtivos;
             if (filterType === 'pendente') {
-                // Pedidos que foram entregues ou estão aguardando entrega, mas sem NF anexada
+                // Pedidos ATIVOS que AINDA NÃO FORAM FINALIZADOS e NÃO TÊM NF ANEXADA
                 pedidosFiltrados = pedidosAtivos.filter(p => p.status !== 'finalizado' && !p.urlNotaFiscal);
             } else if (filterType === 'entregue') {
-                 // Pedidos que têm NF ou que já foram para o status entregue/finalizado (que implica NF ou que não precisa de NF)
-                pedidosFiltrados = pedidosAtivos.filter(p => p.urlNotaFiscal || ['entregue', 'finalizado', 'aguardando-lancamento'].includes(p.status));
+                 // Pedidos ATIVOS que JÁ TÊM NF OU JÁ ESTÃO EM FASE DE LANÇAMENTO/FINALIZAÇÃO
+                pedidosFiltrados = pedidosAtivos.filter(p => p.urlNotaFiscal || ['aguardando-lancamento', 'finalizado'].includes(p.status));
             }
-            // 'todos' retorna tudo
+            // 'todos' retorna todos os pedidos ativos (STATUSES_TO_TRACK)
 
             if (pedidosFiltrados.length === 0) {
                 tbody.innerHTML = `<tr><td colspan="7" class="py-10 text-center text-gray-500">Nenhum pedido encontrado com este filtro.</td></tr>`;
@@ -916,9 +1026,7 @@
                             <div class="text-xs text-gray-500">Vcto: ${vcto}</div>
                         ` : '<div class="text-xs text-gray-400">NF Recebida</div>'; // Recebedor só precisa saber que foi recebida
 
-                        // Se tem NF, mostra ícone de ver e editar (lápis)
-                        // Gestor: Ver NF + Editar (Lápis)
-                        // Recebedor: Ver NF + Editar (Lápis - que só abre o anexo)
+                        // ITENS INDIVIDUAIS COM NF
                         actionBtn = `
                             <div class="flex justify-end gap-2">
                                 <a href="${item.nfUrl}" target="_blank" class="bg-white border border-gray-300 text-gray-700 px-2 py-1 rounded text-xs hover:bg-gray-50 flex items-center gap-1" title="Ver NF">
@@ -935,7 +1043,7 @@
                             </div>
                         `;
                     } else {
-                        // Se NÃO tem NF, mostra o botão "Anexar NF" (ícone de upload)
+                        // ITENS INDIVIDUAIS SEM NF
                         vctoDisplay = isGestor ? '<div class="text-xs text-gray-400">Aguardando NF</div>' : '';
                         actionBtn = `
                             <button onclick="openNFModal('${targetId}', ${item.isGroup})" class="bg-green-600 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-green-700 shadow-sm flex items-center gap-1 ml-auto">
@@ -950,6 +1058,7 @@
                         `;
                     }
                 } else {
+                    // Item não relevante para Recebedor/Gestor (tecnicamente não deveria cair aqui com os filtros)
                     actionBtn = '---';
                     vctoDisplay = '---';
                 }
@@ -978,6 +1087,7 @@
                                 </div>
                            `;
                        } else if (isRecebedor) {
+                           // Botão Único para Recebedor
                            groupActionHtml = `
                                <button onclick="openNFModal('${item.numRN}', true)" class="bg-green-600 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-green-700 shadow-sm flex items-center gap-1 ml-auto">
                                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg> Anexar NF
@@ -1020,47 +1130,69 @@
             f.dataset.isgroup = isGroup;
 
             const isAquisicoes = currentUserProfile.perfil === 'Aquisicoes' || currentUserProfile.perfil === 'Admin';
+            const isRecebedor = currentUserProfile.perfil === 'Recebedor';
             const finArea = document.getElementById('nf-admin-fields');
+            const fileInput = document.getElementById('file-nf-upload');
             const submitBtn = f.querySelector('button[type="submit"]');
 
-            // 1. Visibilidade e habilitação dos campos:
-            // Gestores (Aquisição/Admin) podem ver e editar FIN.
-            // Recebedores só podem ver os campos de upload e enviar/confirmar.
-            if (isAquisicoes) {
-                finArea.classList.remove('hidden');
-                submitBtn.textContent = "Salvar Dados e Recebimento";
-                finArea.querySelectorAll('input, select').forEach(el => el.disabled = false); // Habilita edição
-                
-                // 2. Preencher campos se for item individual
-                if (!isGroup) {
-                    const item = state.pedidos.find(p => p.id === idOrRN);
-                    if (item) {
-                        f.fin.value = item.fin || '';
-                        f.dataEmissao.value = item.dataEmissao || '';
-                        f.dataVcto.value = item.dataVcto || '';
-                        f.modalidadeNF.value = item.modalidadeNF || 'Produto'; 
-                        f.dataset.currentnfurl = item.urlNotaFiscal || ''; 
-                    } else {
-                        f.dataset.currentnfurl = '';
-                    }
-                } else {
-                     // Lógica de Preenchimento para GRUPO/RN
-                     const groupItems = state.pedidos.filter(p => p.numRN === idOrRN);
-                     const refItem = groupItems.find(p => p.fin || p.dataVcto || p.urlNotaFiscal) || groupItems[0];
-                     
-                     f.fin.value = refItem?.fin || '';
-                     f.dataEmissao.value = refItem?.dataEmissao || '';
-                     f.dataVcto.value = refItem?.dataVcto || '';
-                     f.modalidadeNF.value = refItem?.modalidadeNF || 'Produto';
-                     f.dataset.currentnfurl = refItem?.urlNotaFiscal || ''; 
+            // --- Lógica de Preenchimento e Visibilidade ---
+            let currentNFUrl = '';
+            
+            // 2. Preencher campos (Individual ou Grupo)
+            if (!isGroup) {
+                const item = state.pedidos.find(p => p.id === idOrRN);
+                if (item) {
+                    currentNFUrl = item.urlNotaFiscal || ''; 
+                    f.fin.value = item.fin || '';
+                    f.dataEmissao.value = item.dataEmissao || '';
+                    f.dataVcto.value = item.dataVcto || '';
+                    f.modalidadeNF.value = item.modalidadeNF || 'Produto'; 
                 }
             } else {
-                // Recebedor: Oculta campos financeiros e desabilita edição
-                finArea.classList.add('hidden');
-                finArea.querySelectorAll('input, select').forEach(el => el.disabled = true); // Desabilita campos
-                f.dataset.currentnfurl = ''; // Recebedor não precisa preencher current URL
-                submitBtn.textContent = "Anexar NF e Confirmar Recebimento";
+                 // Lógica de Preenchimento para GRUPO/RN
+                 const groupItems = state.pedidos.filter(p => p.numRN === idOrRN);
+                 const refItem = groupItems.find(p => p.fin || p.dataVcto || p.urlNotaFiscal) || groupItems[0];
+                 
+                 currentNFUrl = refItem?.urlNotaFiscal || '';
+                 f.fin.value = refItem?.fin || '';
+                 f.dataEmissao.value = refItem?.dataEmissao || '';
+                 f.dataVcto.value = refItem?.dataVcto || '';
+                 f.modalidadeNF.value = refItem?.modalidadeNF || 'Produto';
             }
+            f.dataset.currentnfurl = currentNFUrl;
+            
+            // 3. Controle de UI
+            if (isAquisicoes) {
+                // Gestor: Campos financeiros visíveis e editáveis. Upload sempre permitido.
+                finArea.classList.remove('hidden');
+                submitBtn.textContent = "Salvar Dados e Recebimento";
+                fileInput.disabled = false;
+                submitBtn.classList.remove('bg-gray-400', 'cursor-not-allowed');
+                submitBtn.classList.add('bg-green-600', 'hover:bg-green-700');
+                finArea.querySelectorAll('input, select').forEach(el => el.disabled = false);
+            } else if (isRecebedor) {
+                // Recebedor: Campos financeiros ocultos e desabilitados.
+                finArea.classList.add('hidden');
+                finArea.querySelectorAll('input, select').forEach(el => el.disabled = true);
+                
+                if (currentNFUrl) {
+                    // NF já anexada: Bloqueia o upload.
+                    submitBtn.textContent = "NF JÁ ANEXADA";
+                    submitBtn.disabled = true;
+                    submitBtn.classList.add('bg-gray-400', 'cursor-not-allowed');
+                    submitBtn.classList.remove('bg-green-600', 'hover:bg-green-700');
+                    fileInput.disabled = true;
+                    showNotification("NF já anexada. Apenas Aquisição pode editar.", "error");
+                } else {
+                    // NF Pendente: Permite o upload.
+                    submitBtn.textContent = "Anexar NF e Confirmar Recebimento";
+                    submitBtn.disabled = false;
+                    submitBtn.classList.remove('bg-gray-400', 'cursor-not-allowed');
+                    submitBtn.classList.add('bg-green-600', 'hover:bg-green-700');
+                    fileInput.disabled = false;
+                }
+            }
+
 
             document.getElementById('modal-nf').classList.remove('hidden');
         };
@@ -1073,17 +1205,26 @@
             if (!tbody) return;
             tbody.innerHTML = '';
             
-            if (state.fornecedores.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="6" class="py-8 text-center text-gray-500">Nenhum fornecedor cadastrado.</td></tr>`;
+            const searchName = document.getElementById('search-fornecedor-name')?.value.toLowerCase() || '';
+            const searchSegmento = document.getElementById('search-fornecedor-segmento')?.value.toLowerCase() || '';
+            
+            let filteredList = state.fornecedores.filter(f => {
+                const matchesName = f.nome.toLowerCase().includes(searchName);
+                const matchesSegmento = (f.segmento || '').toLowerCase().includes(searchSegmento);
+                return matchesName && matchesSegmento;
+            });
+            
+            if (filteredList.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="6" class="py-8 text-center text-gray-500">Nenhum fornecedor cadastrado ou encontrado.</td></tr>`;
                 return;
             }
 
-            state.fornecedores.forEach(f => {
+            filteredList.forEach(f => {
                 tbody.innerHTML += `
                     <tr class="border-b border-gray-100 hover:bg-gray-50">
                         <td class="px-4 py-3 text-sm font-medium text-gray-900">${f.nome}</td>
                         <td class="px-4 py-3 text-sm text-gray-600">${f.cnpj || '-'}</td>
-                        <td class="px-4 py-3 text-sm text-gray-600">${f.email || '-'}</td>
+                        <td class="px-4 py-3 text-sm text-gray-600">${f.segmento || '-'}</td>
                         <td class="px-4 py-3 text-sm text-gray-600">${f.telefone || '-'}</td>
                         <td class="px-4 py-3 text-sm text-gray-600 truncate max-w-xs" title="${f.endereco}">${f.endereco || '-'}</td>
                         <td class="px-4 py-3 text-right">
@@ -1106,11 +1247,36 @@
         };
 
         // --- MODAL GRUPO & ADMIN ---
+        // Função utilitária para recalcular total do item (usada no onchange)
+        window.recalculateItemTotal = function(itemId, inputElement) {
+             const row = inputElement.closest('.group-item-row');
+             if (!row) return;
+
+             const newUnitValue = parseFloat(inputElement.value) || 0;
+             const quantity = parseFloat(row.dataset.quantity) || 1;
+             const newTotal = newUnitValue * quantity;
+
+             row.dataset.unitvalue = newUnitValue.toFixed(2);
+             row.dataset.totalvalue = newTotal.toFixed(2);
+             
+             row.querySelector('.item-total-display').textContent = `R$ ${newTotal.toFixed(2)}`;
+             window.updateGroupModalTotals(); // Atualiza o total geral
+        }
+        
+        // Função utilitária para recalcular total geral do grupo
+        window.updateGroupModalTotals = function() {
+            let total = 0;
+            document.querySelectorAll('.group-item-row').forEach(row => {
+                total += parseFloat(row.dataset.totalvalue || 0);
+            });
+            document.getElementById('group-total-display').textContent = `R$ ${total.toFixed(2)}`;
+        }
+
+
         window.openGroupDetails = (idOrRN) => {
             lastGroupIdForReturn = idOrRN; // Armazena o ID para retorno
 
             let items;
-            // Se o ID for numérico ou curto, assume que é RN (ou o ID do item representativo do grupo pendente)
             const isRnFormat = idOrRN.length < 10 || idOrRN === 'AGRUPAMENTO_PENDENTE';
             let isPendingGroup = false;
 
@@ -1123,7 +1289,7 @@
                  // Caso seja um RN (agrupamento já existente)
                  items = state.pedidos.filter(p => p.numRN === idOrRN);
             } else {
-                 // É o ID de um item individual (ex: se o agrupamento for por ID temporário ou for um erro)
+                 // É o ID de um item individual (ID de um pedido sem RN)
                  const item = state.pedidos.find(p => p.id === idOrRN);
                  if (item) items = [item];
                  else return;
@@ -1131,48 +1297,34 @@
             
             if (items.length === 0) return;
             
-            // Pega dados do primeiro item para preencher o modal
             const first = items[0];
-            
-            // Preenche campos de edição da RN
-            const rnInput = document.getElementById('group-rn-edit');
-            const ocInput = document.getElementById('group-oc-edit');
-            const dateInput = document.getElementById('group-date-edit');
-
-            // Usa o numRN se existir, senão, deixa em branco (para ser inserido)
-            rnInput.value = first.numRN || '';
-            rnInput.dataset.original = first.numRN || '';
-            
-            // Controle de Acesso 
             const perfil = currentUserProfile.perfil || "Solicitante";
             const isAquisicoes = perfil === 'Aquisicoes' || perfil === 'Admin';
             
-            rnInput.disabled = !isAquisicoes;
-            ocInput.disabled = !isAquisicoes;
-            dateInput.disabled = !isAquisicoes;
+            // --- UI FIELDS ---
+            const rnInput = document.getElementById('group-rn-edit');
+            const ocInput = document.getElementById('group-oc-edit');
+            const dateInput = document.getElementById('group-date-edit');
+            const previsaoInput = document.getElementById('group-previsao-edit'); // NOVO
+            const segmentoInput = document.getElementById('group-segmento-edit'); // NOVO
+            const fornecedorInput = document.getElementById('group-fornecedor-edit'); // NOVO
+            const modalidadeSelect = document.getElementById('group-modalidade-select'); // NOVO
+            const grupoSelect = document.getElementById('group-grupo-select'); // NOVO
+
 
             const btnSave = document.getElementById('btn-save-rn-data');
-            if(btnSave) {
-                 if(isAquisicoes) btnSave.classList.remove('hidden');
-                 else btnSave.classList.add('hidden');
-            }
-
             const batchContainer = document.getElementById('group-batch-status-container');
-            if(batchContainer) {
-                 if(isAquisicoes) batchContainer.classList.remove('hidden');
-                 else batchContainer.classList.add('hidden');
-            }
+            const tbody = document.getElementById('group-items-body');
             
-            // Botão Gerar Ficha Cotação 
-            const btnFichaCot = document.getElementById('btn-group-ficha-cotacao');
-            if(btnFichaCot) {
-                // Passa a RN ou, se for grupo pendente, passa os IDs separados por vírgula (lote)
-                const targetForFicha = first.numRN || items.map(i => i.id).join(',');
-                const isGroupFicha = !!first.numRN; // Se tem RN, é grupo de RN. Senão, é lote de IDs.
-                btnFichaCot.onclick = () => window.openCotacaoModal(targetForFicha, isGroupFicha); 
-                if(isAquisicoes) btnFichaCot.classList.remove('hidden');
-                else btnFichaCot.classList.add('hidden');
-            }
+            // Limpa o tbody
+            tbody.innerHTML = '';
+            
+            // Configuração dos campos de RN/OC/Datas
+            rnInput.value = first.numRN || '';
+            rnInput.dataset.original = first.numRN || '';
+            rnInput.disabled = !isAquisicoes; 
+            ocInput.value = first.numOC || '';
+            ocInput.disabled = !isAquisicoes; 
             
             if(first.dataAberturaRN) {
                  try {
@@ -1180,20 +1332,43 @@
                       if(!isNaN(d)) dateInput.value = d.toISOString().split('T')[0];
                  } catch(e){ dateInput.value = ''; }
             } else dateInput.value = '';
+            dateInput.disabled = !isAquisicoes;
 
-            if(first.numOC) ocInput.value = first.numOC;
-            else ocInput.value = '';
-
-            document.getElementById('group-status-select').value = first.status;
-            // Para grupos pendentes (isPendingGroup = true), o 'rn' no dataset deve ser o ID do primeiro item para identificar o grupo
-            document.getElementById('group-status-select').dataset.rn = isPendingGroup ? first.id : first.numRN;
+            // NOVO: Previsão
+            previsaoInput.value = first.dataPrevisao || '';
+            previsaoInput.disabled = !isAquisicoes;
             
-            const tbody = document.getElementById('group-items-body');
-            tbody.innerHTML = '';
+            // Configuração dos campos suplementares (Modalidade, Grupo, Fornecedor, Segmento)
+            if (isAquisicoes) {
+                // Preenche o Fornecedor, Modalidade e Grupo (Usando os dados do primeiro item)
+                fornecedorInput.value = first.fornecedor || '';
+                segmentoInput.value = first.segmento || '';
+
+                modalidadeSelect.innerHTML = state.modalidadesList.map(m => `<option value="${m}" ${m === first.modalidade ? 'selected' : ''}>${m}</option>`).join('');
+                
+                grupoSelect.innerHTML = state.gruposDeCompra.map(g => `<option value="${g}" ${g === first.grupoDeCompra ? 'selected' : ''}>${g}</option>`).join('');
+
+                // Habilita/Exibe botões de aquisição
+                if(btnSave) {
+                    btnSave.classList.remove('hidden');
+                    btnSave.textContent = "Salvar Dados de Aquisição";
+                }
+                if(batchContainer) batchContainer.classList.remove('hidden');
+
+            } else {
+                 // Esconde os campos de edição e botões para Solicitante/Recebedor
+                 if(btnSave) btnSave.classList.add('hidden');
+                 if(batchContainer) batchContainer.classList.add('hidden');
+            }
+            
+            // Preenchimento da tabela de itens (com campos editáveis)
             let total = 0;
+            const unitValueEditable = isAquisicoes ? '' : 'readonly disabled';
             
             items.forEach(p => {
                 total += parseFloat(p.valorTotal||0);
+                
+                const currentUnitValue = parseFloat(p.valorUnitario || 0).toFixed(2);
                 
                 // Botão Desvincular apenas para aquisições E se já houver RN
                 const unlinkBtn = (isAquisicoes && p.numRN) ? 
@@ -1201,17 +1376,33 @@
                         <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" /></svg>
                      </button>` : '';
                 
-                tbody.innerHTML += `
-                    <tr class="border-b border-gray-100">
-                        <td class="py-2 px-4 text-sm">${p.unidade}</td>
-                        <td class="py-2 px-4 text-sm">${p.nomeProduto} <span class="text-gray-400 text-xs">(${p.quantidade}x)</span></td>
-                        <td class="py-2 px-4 text-sm text-right font-medium">R$ ${parseFloat(p.valorTotal).toFixed(2)}</td>
-                        <td class="py-2 px-4 text-center flex justify-center gap-2">
-                             <button onclick="window.openPedidoModal('${p.id}', true)" class="text-blue-600 hover:underline text-xs">Editar</button>
-                             ${unlinkBtn}
-                        </td>
-                    </tr>
+                // Adicionado data attributes para facilitar o recálculo local
+                const tr = document.createElement('tr');
+                tr.className = 'border-b border-gray-100 group-item-row';
+                tr.dataset.id = p.id;
+                tr.dataset.quantity = p.quantidade;
+                tr.dataset.unitvalue = currentUnitValue;
+                tr.dataset.totalvalue = p.valorTotal;
+
+                tr.innerHTML = `
+                    <td class="py-2 px-4 text-sm text-gray-700">
+                        <div class="font-medium">${p.nomeProduto}</div>
+                        <div class="text-xs text-gray-500">${p.unidade} | CR: ${p.cr || '-'}</div>
+                    </td>
+                    <td class="py-2 px-4 text-sm text-gray-700">${p.projeto || '-'}</td>
+                    <td class="py-2 px-4 text-sm text-right font-medium">
+                        <input type="number" step="0.01" value="${currentUnitValue}" 
+                               oninput="window.recalculateItemTotal('${p.id}', this)"
+                               class="w-24 text-right rounded-md border-gray-300 shadow-sm p-1 border ${unitValueEditable ? 'bg-gray-100' : 'bg-white'}"
+                               ${unitValueEditable}>
+                    </td>
+                    <td class="py-2 px-4 text-sm text-right font-medium text-primary-700 item-total-display">R$ ${parseFloat(p.valorTotal).toFixed(2)}</td>
+                    <td class="py-2 px-4 text-center flex justify-center gap-2 items-center">
+                         <button onclick="window.openPedidoModal('${p.id}', true)" class="text-blue-600 hover:underline text-xs">Ver Detalhes</button>
+                         ${unlinkBtn}
+                    </td>
                 `;
+                tbody.appendChild(tr);
             });
             
             document.getElementById('group-total-display').textContent = `R$ ${total.toFixed(2)}`;
@@ -1272,42 +1463,59 @@
         };
 
 
-        // NOVA FUNÇÃO: SALVAR DADOS DA RN
+        // NOVA FUNÇÃO: SALVAR DADOS DO GRUPO (AGRUPAMENTO E DADOS SUPLEMENTARES)
         window.updateGroupData = async () => {
-            const oldRN = document.getElementById('group-rn-edit').dataset.original;
+            const btn = document.getElementById('btn-save-rn-data');
+            btn.disabled = true; btn.textContent = "...";
+            
             const newRN = document.getElementById('group-rn-edit').value;
             const newDate = document.getElementById('group-date-edit').value;
             const newOC = document.getElementById('group-oc-edit').value;
-            const targetId = document.getElementById('group-status-select').dataset.rn; // ID do item se for grupo pendente
+            const newPrevisao = document.getElementById('group-previsao-edit').value; // NOVO
+            const newSegmento = document.getElementById('group-segmento-edit').value; // NOVO
 
-            if(!newRN && !oldRN) return showNotification("O campo Número da RN é obrigatório.", "error");
+            // Dados suplementares
+            const newModalidade = document.getElementById('group-modalidade-select').value;
+            const newGrupo = document.getElementById('group-grupo-select').value;
+            const newFornecedor = document.getElementById('group-fornecedor-edit').value;
+
+
+            if(!newFornecedor) return showNotification("O campo Fornecedor é obrigatório.", "error");
 
             try {
-                let itemsToUpdate;
-                // Se não tinha RN antes, o grupo é composto por todos os pedidos sem RN/data (usaremos os pedidos do grupo atual)
-                if (!oldRN) {
-                    itemsToUpdate = state.pedidos.filter(p => !p.numRN && p.status === 'a-abrir-rn');
-                } else {
-                    // Busca todos os itens da RN antiga
-                    const q = query(collection(db, `artifacts/${appId}/public/data/pedidos`), where("numRN", "==", oldRN));
-                    const querySnap = await getDocs(q);
-                    itemsToUpdate = querySnap.docs.map(d => ({id: d.id, ref: d.ref}));
-                }
-
                 const batch = writeBatch(db);
-                itemsToUpdate.forEach(item => {
-                    batch.update(doc(db, `artifacts/${appId}/public/data/pedidos`, item.id), {
-                        numRN: newRN,
-                        dataAberturaRN: newDate,
-                        numOC: newOC,
-                        status: 'em-cotacao' // Força status de cotação ao salvar RN/OC
-                    });
+
+                // 1. Coleta a lista de itens a serem atualizados (todos na tabela)
+                document.querySelectorAll('.group-item-row').forEach(row => {
+                     // 2. Coleta os valores editados do item
+                     const updatedData = {
+                          valorUnitario: parseFloat(row.dataset.unitvalue),
+                          valorTotal: parseFloat(row.dataset.totalvalue),
+                          // Dados de Aquisição
+                          numRN: newRN || deleteField(),
+                          dataAberturaRN: newDate || deleteField(),
+                          numOC: newOC || deleteField(),
+                          dataPrevisao: newPrevisao || deleteField(), // NOVO
+                          segmento: newSegmento || deleteField(),     // NOVO
+                          // Dados Suplementares
+                          modalidade: newModalidade,
+                          grupoDeCompra: newGrupo,
+                          fornecedor: newFornecedor,
+                          status: 'em-cotacao' // Força status de cotação ao salvar dados principais
+                     };
+                     
+                     batch.update(doc(db, `artifacts/${appId}/public/data/pedidos`, row.dataset.id), updatedData);
                 });
                 
                 await batch.commit();
-                showNotification("Dados da RN atualizados!", "success");
+                showNotification("Dados do Agrupamento atualizados!", "success");
                 window.closeGroupModal();
-            } catch(e) { console.error(e); showNotification("Erro ao salvar RN.", "error"); }
+            } catch(e) { 
+                console.error(e); 
+                showNotification("Erro ao salvar dados do agrupamento. Verifique se os valores unitários são numéricos.", "error"); 
+            } finally {
+                 btn.disabled = false; btn.textContent = "Salvar Dados da RN";
+            }
         };
 
         window.updateGroupStatus = async () => {
@@ -1321,17 +1529,18 @@
             try {
                 let itemsToUpdate = [];
 
-                // Se for RN/Grupo
-                if (rnOrId.length < 10) { 
-                    itemsToUpdate = state.pedidos.filter(p => p.numRN === rnOrId);
-                } else { 
-                    // Se for ID (Grupo pendente), pega todos os pendentes, assumindo que o usuário viu o grupo completo no modal
-                    itemsToUpdate = state.pedidos.filter(p => !p.numRN && p.status === 'a-abrir-rn');
+                // 1. Coleta os itens na tela
+                document.querySelectorAll('.group-item-row').forEach(row => {
+                    itemsToUpdate.push(row.dataset.id);
+                });
+
+                if (itemsToUpdate.length === 0) {
+                     return showNotification("Nenhum item para atualizar.", "error");
                 }
                 
                 const batch = writeBatch(db);
-                itemsToUpdate.forEach(p => {
-                    batch.update(doc(db, `artifacts/${appId}/public/data/pedidos`, p.id), { status: st });
+                itemsToUpdate.forEach(id => {
+                    batch.update(doc(db, `artifacts/${appId}/public/data/pedidos`, id), { status: st });
                 });
 
                 await batch.commit();
@@ -1649,6 +1858,7 @@
                 document.getElementById('bulk-count').textContent = `${state.selectedPedidos.length} selecionados`;
                 
                 // Habilita o botão de gerar ficha na barra de lote
+                // NOVO NOME: Criar Grupo
                 document.getElementById('btn-bulk-rn').onclick = () => document.getElementById('modal-agrupar').classList.remove('hidden');
                 // Quando clicar na ficha de lote, passa os IDs separados por vírgula e isGroup=false (para ser tratado como lote de IDs)
                 document.getElementById('btn-bulk-ficha').onclick = () => window.openCotacaoModal(state.selectedPedidos.join(','), false); 
@@ -1753,10 +1963,10 @@
                       if(p.dataAberturaRN) f.dataAberturaRN.value = p.dataAberturaRN;
                       if(p.dataPrevisao) f.dataPrevisao.value = p.dataPrevisao;
                       if(p.fornecedor) f.fornecedor.value = p.fornecedor;
-                      if (p.segmento) f.segmento.value = p.segmento; // Moved to admin area logic in HTML
+                      if (p.segmento) f.segmento.value = p.segmento; // Mantido para o Admin
 
-                      // LÓGICA DE BLOQUEIO: Se for Solicitante E (tiver RN OU status avançado)
-                      if (currentUserProfile.perfil === 'Solicitante' && (p.numRN || p.status !== 'a-abrir-rn')) {
+                      // LÓGICA DE BLOQUEIO: Se for Solicitante e o status for DIFERENTE de 'enviado-aquisicao'
+                      if (currentUserProfile.perfil === 'Solicitante' && p.status !== 'enviado-aquisicao') {
                           // Desabilita inputs, selects e textareas
                           f.querySelectorAll('input, select, textarea').forEach(el => el.disabled = true);
                           
@@ -1770,7 +1980,8 @@
              } else {
                  if(!filterU) f.unidade.value = currentUserProfile.unidade;
                  f.nomeDemandante.value = currentUserProfile.nome;
-                 f.status.value = 'a-abrir-rn';
+                 // NOVO STATUS PADRÃO: Enviado para Aquisição
+                 f.status.value = 'enviado-aquisicao';
              }
              document.getElementById('modal-pedido').classList.remove('hidden');
         };
@@ -1779,7 +1990,10 @@
              document.getElementById('modal-pedido').classList.add('hidden');
              // Se veio do modal de grupo e há um ID/RN salvo, reabre o modal de grupo
              if (document.getElementById('form-pedido').dataset.fromgroup === 'true' && lastGroupIdForReturn) {
-                 window.openGroupDetails(lastGroupIdForReturn);
+                 // ** CORREÇÃO AQUI: Se veio do modal de grupo, não reabra o modal de grupo. **
+                 // O usuário deve clicar no botão "Voltar para o Grupo" ou interagir com a tabela principal.
+                 // REMOVIDO: window.openGroupDetails(lastGroupIdForReturn);
+                 // Apenas fechar para voltar à lista principal/última tela.
              }
         };
 
@@ -1820,12 +2034,32 @@
                 }
              });
              
+             // NOVO: Filtro de busca na Solicitação
+             const searchFilterInput = document.getElementById('filter-search');
+             if (searchFilterInput) {
+                searchFilterInput.addEventListener('input', e => {
+                    state.filtros.search = e.target.value;
+                    renderPedidosTable(state.pedidos);
+                });
+             }
+             
              // Filter NF change (NOVO)
              const filterNF = document.getElementById('filter-nf-status');
              if(filterNF) { // Verifica a existência do elemento
                  filterNF.addEventListener('change', renderGestaoNFPage);
              }
              
+             // Filter Fornecedor change (BUSCA)
+             document.getElementById('search-fornecedor-name')?.addEventListener('input', renderFornecedoresPage);
+             document.getElementById('search-fornecedor-segmento')?.addEventListener('input', renderFornecedoresPage);
+             
+             // NOVO: Fornecedor Save (Abre Modal)
+             document.getElementById('btn-novo-fornecedor')?.addEventListener('click', () => {
+                 document.getElementById('modal-fornecedor').classList.remove('hidden');
+             });
+             // Helper global para fechar modal de fornecedor
+             window.closeFornecedorModal = () => document.getElementById('modal-fornecedor').classList.add('hidden');
+
              // Save Pedido
              document.getElementById('form-pedido').addEventListener('submit', async e => {
                  e.preventDefault();
@@ -1861,18 +2095,31 @@
                           numRN: f.numRN.value, numOC: f.numOC.value, status: f.status.value,
                           dataAberturaRN: f.dataAberturaRN.value, dataPrevisao: f.dataPrevisao.value,
                           fornecedor: f.fornecedor.value,
-                          segmento: f.segmento.value // Moved to admin
+                          segmento: f.segmento.value 
                      };
                      
-                     // Uploads simplificados
-                     if(f.fileOrc.files[0]) {
-                          const r = ref(storage, `artifacts/${appId}/docs/${Date.now()}_orc`);
-                          await uploadBytes(r, f.fileOrc.files[0]); data.urlOrcamento = await getDownloadURL(r);
+                     // NOVO: TRATAMENTO DE UPLOADS MÚLTIPLOS (Anexar arquivos)
+                     let uploadedUrls = [];
+                     const files = f.fileAttachments.files;
+                     
+                     for(let i=0; i < files.length; i++) {
+                         const file = files[i];
+                         const r = ref(storage, `artifacts/${appId}/docs/${Date.now()}_${file.name}`);
+                         await uploadBytes(r, file);
+                         const url = await getDownloadURL(r);
+                         uploadedUrls.push(url);
                      }
-                     if(f.fileNF.files[0]) {
-                          const r = ref(storage, `artifacts/${appId}/docs/${Date.now()}_nf`);
-                          await uploadBytes(r, f.fileNF.files[0]); data.urlNotaFiscal = await getDownloadURL(r);
+                     
+                     // Se houver anexo existente (edição), mescla as URLs
+                     let existingUrls = [];
+                     if (f.dataset.id) {
+                         const existing = state.pedidos.find(p => p.id === f.dataset.id);
+                         if (existing && existing.urlAnexos) {
+                              existingUrls = Array.isArray(existing.urlAnexos) ? existing.urlAnexos : [existing.urlAnexos];
+                         }
                      }
+                     data.urlAnexos = [...existingUrls, ...uploadedUrls];
+
 
                      if(f.dataset.id) {
                           await updateDoc(doc(db, `artifacts/${appId}/public/data/pedidos`, f.dataset.id), data);
@@ -1882,6 +2129,8 @@
                           data.solicitanteId = currentUser.uid;
                           data.solicitanteEmail = currentUser.email;
                           data.solicitanteNome = currentUserProfile.nome;
+                          // NOVO STATUS PADRÃO: Enviado para Aquisição
+                          data.status = 'enviado-aquisicao';
                           await addDoc(collection(db, `artifacts/${appId}/public/data/pedidos`), data);
                           showNotification("Pedido criado!", "success");
                      }
@@ -1909,7 +2158,7 @@
                           fornecedor: f.fornecedor.value,
                           
                           // Default/Hidden
-                          status: 'a-abrir-rn',
+                          status: 'enviado-aquisicao', // NOVO STATUS PADRÃO
                           nomeDemandante: currentUserProfile.nome,
                           solicitanteId: currentUser.uid,
                           solicitanteEmail: currentUser.email,
@@ -1969,6 +2218,25 @@
                      f.reset(); closeUnidadeModal();
                  } catch(err){ console.error(err); showNotification("Erro ao salvar unidade.", "error"); }
              });
+             
+             // NOVO: Save Fornecedor Form
+             document.getElementById('form-fornecedor').addEventListener('submit', async e => {
+                 e.preventDefault();
+                 const f = e.target;
+                 
+                 // CORREÇÃO: A lógica de salvar está correta, mas melhoramos o tratamento de erro.
+                 try {
+                      await addDoc(collection(db, `artifacts/${appId}/public/data/fornecedores`), {
+                          nome: f.nome.value, cnpj: f.cnpj.value, segmento: f.segmento.value, email: f.email.value, telefone: f.telefone.value, endereco: f.endereco.value
+                      });
+                      showNotification("Fornecedor cadastrado!", "success");
+                      f.reset(); document.getElementById('modal-fornecedor').classList.add('hidden');
+                 } catch(err){ 
+                      console.error("ERRO AO CADASTRAR FORNECEDOR:", err);
+                      // Tentativa de mostrar a mensagem de erro do Firebase na notificação
+                      showNotification("Erro ao cadastrar fornecedor: " + (err.message || 'Verifique o console.'), "error"); 
+                 }
+             });
 
 
              // Calc Total
@@ -1978,9 +2246,9 @@
              const totInput = document.getElementById('inp-tot');
              
              const calc = () => {
-                 const q = parseFloat(qtdInput.value)||0;
-                 const v = parseFloat(valInput.value)||0;
-                 totInput.value = (q*v).toFixed(2);
+                 const q = parseFloat(qtdInput?.value)||0;
+                 const v = parseFloat(valInput?.value)||0;
+                 if (totInput) totInput.value = (q*v).toFixed(2);
              };
              
              if (qtdInput && valInput && totInput) {
@@ -1989,7 +2257,7 @@
              }
              
              // Search Product
-             document.getElementById('inp-search').addEventListener('keyup', e => {
+             document.getElementById('inp-search')?.addEventListener('keyup', e => {
                  clearTimeout(searchDebounceTimer);
                  if(e.target.value.length < 3) { document.getElementById('pedido-results').innerHTML=''; return; }
                  searchDebounceTimer = setTimeout(async () => {
@@ -2071,138 +2339,53 @@
                  } catch(err){ showNotification("Erro ao criar link.", "error"); }
              });
 
-             // NOVO: Fornecedor Save
-             document.getElementById('btn-novo-fornecedor').addEventListener('click', () => document.getElementById('modal-fornecedor').classList.remove('hidden'));
-             window.closeFornecedorModal = () => document.getElementById('modal-fornecedor').classList.add('hidden');
-             
-             document.getElementById('form-fornecedor').addEventListener('submit', async e => {
-                 e.preventDefault();
-                 const f = e.target;
-                 try {
-                      await addDoc(collection(db, `artifacts/${appId}/public/data/fornecedores`), {
-                          nome: f.nome.value, cnpj: f.cnpj.value, email: f.email.value, telefone: f.telefone.value, endereco: f.endereco.value
-                      });
-                      showNotification("Fornecedor cadastrado!", "success");
-                      f.reset(); document.getElementById('modal-fornecedor').classList.add('hidden');
-                 } catch(err){ showNotification("Erro ao cadastrar fornecedor.", "error"); }
-             });
-
-             // NOVO: Form NF Upload (AUTOMATIZADO PARA RECEBEDOR)
-             document.getElementById('form-nf-upload').addEventListener('submit', async e => {
-                 e.preventDefault();
-                 const f = e.target;
-                 const target = f.dataset.target;
-                 const isGroup = f.dataset.isgroup === 'true';
-                 const file = document.getElementById('file-nf-upload').files[0];
-                 const isAquisicoes = currentUserProfile.perfil === 'Aquisicoes' || currentUserProfile.perfil === 'Admin';
-                 const currentUrl = f.dataset.currentnfurl; // Armazena a URL da NF existente, se houver.
-
-
-                 // 1. Validação de Arquivo
-                 if (!file && !currentUrl) {
-                      // Se não há arquivo NOVO e não há URL existente, e não é edição puramente financeira...
-                      if (!isAquisicoes || (!f.fin?.value && !f.dataEmissao?.value && !f.dataVcto?.value)) { // Adicionado '?' para evitar erro de Recebedor
-                         return showNotification("Selecione um arquivo de NF.", "error");
-                      }
-                 }
-                 
-                 const btn = f.querySelector('button[type="submit"]');
-                 btn.disabled = true; btn.textContent = "...";
-
-                 try {
-                      let url = currentUrl || ''; // Preserva a URL existente se não houver upload novo
-                      
-                      // 2. Upload de Arquivo (se existir)
-                      if (file) {
-                          const storageRef = ref(storage, `artifacts/${appId}/nfs/${Date.now()}_${file.name}`);
-                          await uploadBytes(storageRef, file);
-                          url = await getDownloadURL(storageRef);
-                      }
-                      
-                      const batch = writeBatch(db);
-                      
-                      // 3. Dados base para atualização
-                      const updateData = {};
-                      
-                      // Só seta o status para 'entregue' e dados de recebimento se for Recebedor OU se for Gestor E a NF for nova/atualizada
-                      if (!isAquisicoes || (isAquisicoes && (file || (currentUrl !== url)))) {
-                           updateData.status = 'entregue'; // Automático
-                           updateData.recebedor = currentUserProfile.nome; // Quem recebeu
-                           updateData.dataRecebimento = Timestamp.now();
-                      }
-                      
-                      if (url) {
-                          updateData.urlNotaFiscal = url;
-                      } else {
-                          // Se não houver URL e não houve upload, removemos o campo se ele era o alvo principal
-                          if (!isAquisicoes && !file) updateData.urlNotaFiscal = deleteField();
-                      }
-                      
-                      // 4. Dados financeiros (Apenas se for Gestor/Admin)
-                      if (isAquisicoes) {
-                          updateData.fin = f.fin.value || deleteField();
-                          updateData.dataEmissao = f.dataEmissao.value || deleteField();
-                          updateData.dataVcto = f.dataVcto.value || deleteField();
-                          updateData.modalidadeNF = f.modalidadeNF.value || deleteField();
-                      } else {
-                           // Garante que o Recebedor não sobrescreva campos financeiros
-                           updateData.fin = deleteField();
-                           updateData.dataEmissao = deleteField();
-                           updateData.dataVcto = deleteField();
-                           updateData.modalidadeNF = deleteField();
-                      }
-
-                      // 5. Execução do Batch
-                      if (isGroup) {
-                          // Update all items in RN
-                          const q = query(collection(db, `artifacts/${appId}/public/data/pedidos`), where("numRN", "==", target));
-                          const snap = await getDocs(q);
-                          snap.forEach(d => {
-                              batch.update(d.ref, updateData);
-                          });
-                      } else {
-                          // Update single item
-                          const docRef = doc(db, `artifacts/${appId}/public/data/pedidos`, target);
-                          batch.update(docRef, updateData);
-                      }
-                      
-                      await batch.commit();
-                      showNotification("NF anexada/atualizada!", "success");
-                      window.closeNFModal();
-                 } catch(err) {
-                      console.error(err);
-                      showNotification("Erro ao anexar/atualizar NF.", "error");
-                 } finally {
-                      btn.disabled = false; btn.textContent = "Salvar Dados e Recebimento";
-                 }
-             });
-             
-             // Admin: Populate units select
-             const adminU = document.getElementById('admin-unidade');
-             if(adminU) {
-                 state.unidades.forEach(x => adminU.innerHTML += `<option value="${x}">${x}</option>`);
-             }
-             
              // Bulk Group
              document.getElementById('btn-bulk-rn').addEventListener('click', () => document.getElementById('modal-agrupar').classList.remove('hidden'));
              document.getElementById('form-agrupar').addEventListener('submit', async e => {
                  e.preventDefault();
-                 const rn = e.target.numRN.value.trim(); 
-                 const oc = e.target.numOC.value.trim();
-                 const dt = e.target.dataAberturaRN.value;
+                 const f = e.target;
+                 const fornecedor = f.fornecedor.value.trim(); 
+                 const statusToSet = f.status.value; 
+                 const files = f.fileBulkAttachments.files; // NOVO CAMPO
 
-                 // Se a RN for vazia, usamos o status 'a-inserir-rn' (mantendo a lógica visual do status)
-                 const statusToSet = rn ? 'em-cotacao' : 'a-abrir-rn';
+                 if (!fornecedor) return showNotification("O campo Fornecedor é obrigatório.", "error");
                  
+                 const btnSubmit = f.querySelector('button[type="submit"]');
+                 btnSubmit.disabled = true; btnSubmit.textContent = "...";
+
+
+                 // 1. Upload dos arquivos
+                 let uploadedUrls = [];
+                 try {
+                      for(let i=0; i < files.length; i++) {
+                          const file = files[i];
+                          const r = ref(storage, `artifacts/${appId}/bulk_docs/${Date.now()}_${file.name}`);
+                          await uploadBytes(r, file);
+                          const url = await getDownloadURL(r);
+                          uploadedUrls.push(url);
+                      }
+                 } catch (uploadError) {
+                      console.error("Erro no upload em lote:", uploadError);
+                      showNotification("Erro ao fazer upload dos orçamentos.", "error");
+                      btnSubmit.disabled = false; btnSubmit.textContent = "Aplicar em Lote";
+                      return;
+                 }
+
+
+                 // 2. Aplica as atualizações em lote nos pedidos selecionados
                  const batch = writeBatch(db);
                  state.selectedPedidos.forEach(id => batch.update(doc(db, `artifacts/${appId}/public/data/pedidos`, id), { 
-                     numRN: rn || deleteField(), // Salva ou remove campo
-                     numOC: oc || deleteField(),
-                     dataAberturaRN: dt || deleteField(),
-                     status: statusToSet 
+                     fornecedor: fornecedor,
+                     status: statusToSet,
+                     urlBulkAnexos: uploadedUrls.length > 0 ? uploadedUrls : deleteField(), // Salva ou remove o array
+                     // Remove campos que não são mais definidos aqui
+                     numRN: deleteField(),
+                     numOC: deleteField(),
+                     dataAberturaRN: deleteField()
                  }));
+                 
                  await batch.commit();
-                 showNotification("Agrupamento realizado!", "success");
+                 showNotification("Agrupamento (Definição de Fornecedor/Status) realizado!", "success");
                  document.getElementById('modal-agrupar').classList.add('hidden');
                  state.selectedPedidos = []; updateBulkActionBar();
              });
@@ -2247,10 +2430,10 @@
     <!-- APP LAYOUT -->
     <div id="app-page" class="hidden h-full flex">
         
-        <!-- SIDEBAR -->
-        <div class="w-64 bg-primary-900 text-white flex flex-col fixed h-full z-20 shadow-xl">
+        <!-- SIDEBAR WRAPPER -->
+        <div id="sidebar-wrapper" class="w-64 bg-primary-900 text-white flex flex-col fixed h-full z-20 shadow-xl transition-all duration-300">
             <div class="h-16 flex items-center px-6 font-bold text-xl tracking-wider border-b border-primary-800 bg-primary-950">
-                SISGA <span class="text-primary-400 text-xs ml-2 font-normal">v2.6</span>
+                SISGA <span class="text-primary-400 text-xs ml-2 font-normal">v2.7</span>
             </div>
             
             <nav class="flex-1 px-3 py-6 space-y-1 overflow-y-auto">
@@ -2322,8 +2505,18 @@
             </div>
         </div>
 
-        <!-- CONTENT -->
-        <div class="ml-64 flex-1 flex flex-col h-full overflow-hidden">
+        <!-- CONTENT WRAPPER -->
+        <div id="main-content-wrapper" class="ml-64 flex-1 flex flex-col h-full overflow-hidden transition-all duration-300">
+            <header class="bg-white shadow-sm h-16 flex items-center px-6 border-b border-gray-200 sticky top-0 z-10">
+                 <!-- NOVO: Botão de Toggle da Sidebar -->
+                <button id="sidebar-toggle-btn" class="text-gray-500 hover:text-primary-600 mr-4 focus:outline-none">
+                    <svg id="sidebar-toggle-icon" class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <!-- Ícone inicial (esconde) -->
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
+                    </svg>
+                </button>
+            </header>
+    
             <main class="flex-1 overflow-y-auto p-8">
                 
                 <!-- DASHBOARD PAGE -->
@@ -2362,7 +2555,7 @@
                         <!-- Preenchido via JS -->
                     </div>
                 </div>
-
+    
                 <!-- SOLICITACOES PAGE -->
                 <div id="solicitacoes" class="page-content hidden w-full">
                     <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
@@ -2372,9 +2565,13 @@
                             Nova Solicitação
                         </button>
                     </div>
-
+    
                     <!-- Filtros -->
-                    <div class="bg-white p-4 rounded-lg shadow-sm border border-gray-200 mb-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div class="bg-white p-4 rounded-lg shadow-sm border border-gray-200 mb-6 grid grid-cols-1 md:grid-cols-4 gap-4">
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Buscar RN/OC</label>
+                            <input type="text" id="filter-search" placeholder="RN ou OC..." class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-gray-50">
+                        </div>
                         <div>
                             <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Unidade</label>
                             <select id="filter-unidade" class="block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm rounded-md border bg-gray-50"></select>
@@ -2388,7 +2585,7 @@
                             <select id="filter-status" class="block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm rounded-md border bg-gray-50"></select>
                         </div>
                     </div>
-
+    
                     <!-- Tabela -->
                     <div class="bg-white shadow-sm border border-gray-200 rounded-lg overflow-hidden">
                         <div class="overflow-x-auto">
@@ -2397,9 +2594,7 @@
                                     <tr>
                                         <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-10">#</th>
                                         <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">RN</th>
-                                        <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Unidade/Demandante</th>
-                                        <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Produto/Item</th>
-                                        <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Modalidade</th>
+                                        <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" colspan="3">Unidade/Fornecedor/Previsão</th>
                                         <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Data</th>
                                         <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Valor</th>
                                         <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
@@ -2411,7 +2606,7 @@
                         </div>
                     </div>
                 </div>
-
+    
                 <!-- SERVIÇOS PAGE (NOVO) -->
                 <div id="servicos" class="page-content hidden w-full">
                     <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
@@ -2421,7 +2616,7 @@
                             Solicitar Serviço
                         </button>
                     </div>
-
+    
                     <div class="bg-white shadow-sm border border-gray-200 rounded-lg overflow-hidden">
                         <div class="overflow-x-auto">
                             <table class="min-w-full divide-y divide-gray-200">
@@ -2441,7 +2636,7 @@
                         </div>
                     </div>
                 </div>
-
+    
                 <!-- GESTAO DE NF PAGE (NOVO) -->
                 <div id="gestao-nf" class="page-content hidden w-full">
                      <div class="flex justify-between items-center mb-6">
@@ -2472,7 +2667,7 @@
                         </div>
                      </div>
                 </div>
-
+    
                 <!-- FORNECEDORES PAGE -->
                 <div id="fornecedores" class="page-content hidden w-full">
                     <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
@@ -2483,6 +2678,18 @@
                         </button>
                     </div>
                     
+                    <!-- NOVO: Filtros de Busca de Fornecedor -->
+                    <div class="bg-white p-4 rounded-lg shadow-sm border border-gray-200 mb-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Buscar por Nome</label>
+                            <input type="text" id="search-fornecedor-name" placeholder="Digite o nome..." class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-gray-50">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Filtrar por Segmento</label>
+                            <input type="text" id="search-fornecedor-segmento" placeholder="Digite o segmento..." class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-gray-50">
+                        </div>
+                    </div>
+    
                     <div class="bg-white shadow-sm border border-gray-200 rounded-lg overflow-hidden">
                         <div class="overflow-x-auto">
                             <table class="min-w-full divide-y divide-gray-200">
@@ -2490,7 +2697,7 @@
                                     <tr>
                                              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Nome / Razão Social</th>
                                              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">CNPJ</th>
-                                             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">E-mail</th>
+                                             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Segmento</th>
                                              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Telefone</th>
                                              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Endereço</th>
                                              <th class="px-4 py-3"></th>
@@ -2529,7 +2736,7 @@
                         </div>
                     </div>
                 </div>
-
+    
                 <!-- ADMIN PAGE -->
                 <div id="admin" class="page-content hidden max-w-7xl mx-auto">
                     <h2 class="text-2xl font-bold text-gray-900 mb-6">Painel Administrativo</h2>
@@ -2581,7 +2788,7 @@
                                     </div>
                                 </form>
                             </div>
-
+    
                             <div class="bg-white shadow-sm rounded-lg border border-gray-200 overflow-hidden">
                                 <table class="min-w-full divide-y divide-gray-200">
                                     <thead class="bg-gray-50">
@@ -2597,7 +2804,7 @@
                                 </table>
                             </div>
                         </div>
-
+    
                         <!-- Gestão de Links -->
                         <div class="space-y-6">
                             <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
@@ -2645,549 +2852,660 @@
                         </div>
                     </div>
                 </div>
-
+    
             </main>
         </div>
     </div>
-
-    <!-- BULK BAR -->
-    <div id="bulk-bar" class="fixed bottom-0 inset-x-0 bg-white border-t border-gray-200 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] z-30 transform translate-y-full transition-transform duration-300 p-4 flex items-center justify-between lg:pl-72">
-        <div class="flex items-center space-x-4">
-            <span class="bg-primary-100 text-primary-800 text-xs font-bold px-2.5 py-0.5 rounded-full uppercase tracking-wide">Lote</span>
-            <span id="bulk-count" class="font-semibold text-gray-900">0 selecionados</span>
-        </div>
-        <div class="flex gap-3">
-            <!-- Botão de Gerar Ficha para Lote -->
-            <button id="btn-bulk-ficha" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none">
-                <svg class="mr-2 -ml-1 h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-                Gerar Ficha Lote
-            </button>
-            <button id="btn-bulk-rn" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700 focus:outline-none">
-                <svg class="mr-2 -ml-1 h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" /></svg>
-                Vincular a RN
-            </button>
-        </div>
-    </div>
-
-    <!-- MODALS -->
     
-    <!-- Modal Unidade (NOVO) -->
-    <div id="modal-unidade" class="relative z-50 hidden">
-        <div class="fixed inset-0 bg-gray-900/75 backdrop-blur-sm transition-opacity"></div>
-        <div class="fixed inset-0 z-10 overflow-y-auto">
-            <div class="flex min-h-full items-center justify-center p-4 text-center sm:p-0">
-                <div class="relative transform overflow-hidden rounded-lg bg-white text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-2xl">
-                    <form id="form-unidade" class="flex flex-col h-full">
-                        <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-                            <h3 id="modal-unidade-title" class="text-lg font-bold leading-6 text-gray-900 mb-4 flex items-center gap-2">
-                                <svg class="h-6 w-6 text-primary-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" /></svg>
-                                Cadastro de Unidade
-                            </h3>
-                            <div class="grid grid-cols-12 gap-4">
-                                <div class="col-span-6">
-                                    <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Empresa</label>
-                                    <input name="empresa" required class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                                </div>
-                                <div class="col-span-6">
-                                    <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Filial</label>
-                                    <input name="filial" required class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                                </div>
-                                <div class="col-span-6">
-                                    <label class="block text-xs font-medium text-gray-700 uppercase mb-1">CNPJ/CPF</label>
-                                    <input name="cnpj" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                                </div>
-                                <div class="col-span-6">
-                                    <label class="block text-xs font-medium text-gray-700 uppercase mb-1">IE</label>
-                                    <input name="ie" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                                </div>
-                                <div class="col-span-6">
-                                    <label class="block text-xs font-medium text-gray-700 uppercase mb-1">Telefone</label>
-                                    <input name="telefone" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                                </div>
-                                <div class="col-span-6">
-                                    <label class="block text-xs font-medium text-gray-700 uppercase mb-1">Contato</label>
-                                    <input name="contato" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                                </div>
-                                <div class="col-span-6">
-                                    <label class="block text-xs font-medium text-gray-700 uppercase mb-1">Email</label>
-                                    <input name="email" type="email" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                                </div>
-                                <div class="col-span-6">
-                                    <label class="block text-xs font-medium text-gray-700 uppercase mb-1">CEP</label>
-                                    <input name="cep" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                                </div>
-                                <div class="col-span-9">
-                                    <label class="block text-xs font-medium text-gray-700 uppercase mb-1">Endereço</label>
-                                    <input name="endereco" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                                </div>
-                                <div class="col-span-3">
-                                    <label class="block text-xs font-medium text-gray-700 uppercase mb-1">Número</label>
-                                    <input name="numero" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                                </div>
-                                <div class="col-span-4">
-                                    <label class="block text-xs font-medium text-gray-700 uppercase mb-1">Bairro</label>
-                                    <input name="bairro" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                                </div>
-                                <div class="col-span-4">
-                                    <label class="block text-xs font-medium text-gray-700 uppercase mb-1">Complemento</label>
-                                    <input name="complemento" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                                </div>
-                                <div class="col-span-4">
-                                    <label class="block text-xs font-medium text-gray-700 uppercase mb-1">Município</label>
-                                    <input name="municipio" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                                </div>
-                            </div>
-                        </div>
-                        <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse border-t border-gray-200">
-                            <button type="submit" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-primary-600 text-base font-medium text-white hover:bg-primary-700 focus:outline-none sm:ml-3 sm:w-auto sm:text-sm">Salvar Unidade</button>
-                            <button type="button" onclick="closeUnidadeModal()" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">Cancelar</button>
-                        </div>
-                    </form>
-                </div>
+        <!-- BULK BAR -->
+        <div id="bulk-bar" class="fixed bottom-0 inset-x-0 bg-white border-t border-gray-200 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] z-30 transform translate-y-full transition-transform duration-300 p-4 flex items-center justify-between lg:pl-72">
+            <div class="flex items-center space-x-4">
+                <span class="bg-primary-100 text-primary-800 text-xs font-bold px-2.5 py-0.5 rounded-full uppercase tracking-wide">Lote</span>
+                <span id="bulk-count" class="font-semibold text-gray-900">0 selecionados</span>
+            </div>
+            <div class="flex gap-3">
+                <!-- Botão de Gerar Ficha para Lote -->
+                <button id="btn-bulk-ficha" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none">
+                    <svg class="mr-2 -ml-1 h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                    Gerar Ficha Lote
+                </button>
+                <button id="btn-bulk-rn" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700 focus:outline-none">
+                    <svg class="mr-2 -ml-1 h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" /></svg>
+                    Criar Grupo
+                </button>
             </div>
         </div>
-    </div>
     
-    <!-- Modal Serviço (NOVO) -->
-    <div id="modal-servico" class="relative z-50 hidden">
-        <div class="fixed inset-0 bg-gray-900/75 backdrop-blur-sm transition-opacity"></div>
-        <div class="fixed inset-0 z-10 overflow-y-auto">
-            <div class="flex min-h-full items-center justify-center p-4 text-center sm:p-0">
-                <div class="relative transform overflow-hidden rounded-lg bg-white text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-2xl">
-                    <form id="form-servico" class="flex flex-col h-full">
-                        <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-                            <h3 class="text-lg font-bold leading-6 text-gray-900 mb-4 flex items-center gap-2">
-                                <svg class="h-6 w-6 text-primary-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-                                Nova Solicitação de Serviço
-                            </h3>
-                            
-                            <div class="grid grid-cols-2 gap-4">
-                                <div>
-                                    <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Unidade</label>
-                                    <select name="unidade" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border"></select>
-                                </div>
-                                <div>
-                                    <label class="block text-xs font-medium text-gray-500 uppercase mb-1">CR</label>
-                                    <input name="cr" required class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                                </div>
-                                <div class="col-span-2">
-                                    <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Projeto</label>
-                                    <input name="projeto" required class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                                </div>
-                                <div class="col-span-2">
-                                    <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Descrição do Serviço</label>
-                                    <textarea name="descricao" required rows="3" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border"></textarea>
-                                </div>
-                                <div>
-                                    <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Data Prevista Execução</label>
-                                    <input name="dataPrevisao" type="date" required class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                                </div>
-                                <div>
-                                    <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Fornecedor Sugerido</label>
-                                    <input list="fornecedores-datalist-servico" name="fornecedor" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border" placeholder="Busque ou digite...">
-                                    <datalist id="fornecedores-datalist-servico"></datalist>
-                                </div>
-                                <div class="col-span-2">
-                                    <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Anexar Orçamento</label>
-                                    <input type="file" name="fileOrc" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100">
-                                </div>
-                            </div>
-                        </div>
-                        <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse border-t border-gray-200">
-                            <button type="submit" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-primary-600 text-base font-medium text-white hover:bg-primary-700 focus:outline-none sm:ml-3 sm:w-auto sm:text-sm">Solicitar Serviço</button>
-                            <button type="button" onclick="closeServicoModal()" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">Cancelar</button>
-                        </div>
-                    </form>
-                </div>
-            </div>
-        </div>
-    </div>
-    
-    <!-- Modal NF Upload (NOVO) -->
-    <div id="modal-nf" class="relative z-50 hidden">
-        <div class="fixed inset-0 bg-gray-900/75 backdrop-blur-sm"></div>
-        <div class="fixed inset-0 z-10 flex items-center justify-center p-4">
-            <div class="bg-white rounded-lg shadow-xl w-full max-w-md p-6">
-                <h3 class="text-lg font-bold mb-4 text-gray-900">Anexar Nota Fiscal / Edição Financeira</h3>
-                <form id="form-nf-upload" class="space-y-4">
-                    <div class="bg-blue-50 border border-blue-100 p-3 rounded text-sm text-blue-800">
-                        Ao anexar a NF, os itens serão marcados automaticamente como <strong>Entregue</strong> na data de hoje.
-                    </div>
-
-                    <!-- Campos Financeiros - Visível apenas para Aquisições/Admin -->
-                    <div id="nf-admin-fields" class="space-y-4 border-t border-gray-200 pt-4 hidden">
-                         <h4 class="text-xs font-bold text-gray-500 uppercase tracking-wider">Dados Financeiros (NF)</h4>
-                         <div class="grid grid-cols-2 gap-4">
-                             <div>
-                                 <label class="block text-xs font-medium text-gray-700 mb-1">FIN</label>
-                                 <input name="fin" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                             </div>
-                             <div>
-                                 <label class="block text-xs font-medium text-gray-700 mb-1">Modalidade NF</label>
-                                 <select name="modalidadeNF" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-white">
-                                     <option value="Produto">Produto</option>
-                                     <option value="Serviço">Serviço</option>
-                                 </select>
-                             </div>
-                             <div>
-                                 <label class="block text-xs font-medium text-gray-700 mb-1">Data Emissão NF</label>
-                                 <input name="dataEmissao" type="date" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                             </div>
-                             <div>
-                                 <label class="block text-xs font-medium text-gray-700 mb-1">Data Vcto</label>
-                                 <input name="dataVcto" type="date" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                             </div>
-                         </div>
-                    </div>
-                    
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">Arquivo da NF</label>
-                        <!-- Adicionei data-currentnfurl no form para rastrear se já existe NF -->
-                        <input type="file" id="file-nf-upload" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100">
-                    </div>
-                    <div class="flex justify-end gap-2 pt-2">
-                         <button type="button" onclick="closeNFModal()" class="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50">Cancelar</button>
-                         <button type="submit" class="px-4 py-2 bg-green-600 text-white rounded-md text-sm font-medium hover:bg-green-700 shadow-sm">Salvar Dados e Recebimento</button>
-                    </div>
-                </form>
-            </div>
-        </div>
-    </div>
-
-    <!-- Modal Cotação (Novo) -->
-    <div id="modal-ficha-cotacao" class="relative z-50 hidden">
-        <div class="fixed inset-0 bg-gray-900/75 backdrop-blur-sm"></div>
-        <div class="fixed inset-0 z-10 flex items-center justify-center p-4">
-            <div class="bg-white rounded-lg shadow-xl w-full max-w-md p-6">
-                <h3 class="text-lg font-bold mb-4 text-gray-900">Gerar Ficha de Cotação (PDF)</h3>
-                <p class="text-sm text-gray-600 mb-4">Selecione a unidade que será a emissora oficial no documento.</p>
-                <div class="space-y-4">
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">Unidade Emissora</label>
-                        <select id="select-unidade-cotacao" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border"></select>
-                    </div>
-                    <div class="flex justify-end gap-2 pt-2">
-                        <button type="button" onclick="closeCotacaoModal()" class="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50">Cancelar</button>
-                        <button type="button" id="btn-gerar-ficha" onclick="generateCotacaoFicha()" class="px-4 py-2 bg-green-600 text-white rounded-md text-sm font-medium hover:bg-green-700 shadow-sm">Gerar Documento</button>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Modal Fornecedor -->
-    <div id="modal-fornecedor" class="relative z-50 hidden">
-        <div class="fixed inset-0 bg-gray-900/75 backdrop-blur-sm"></div>
-        <div class="fixed inset-0 z-10 flex items-center justify-center p-4">
-            <div class="bg-white rounded-lg shadow-xl w-full max-w-md p-6">
-                <h3 class="text-lg font-bold mb-4">Novo Fornecedor</h3>
-                <form id="form-fornecedor" class="space-y-4">
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700">Nome / Razão Social</label>
-                        <input name="nome" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700">CNPJ</label>
-                        <input name="cnpj" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                    </div>
-                    <div class="grid grid-cols-2 gap-4">
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700">E-mail</label>
-                            <input name="email" type="email" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700">Telefone</label>
-                            <input name="telefone" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                        </div>
-                    </div>
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700">Endereço</label>
-                        <input name="endereco" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                    </div>
-                    <div class="flex justify-end gap-2 pt-2">
-                         <button type="button" onclick="closeFornecedorModal()" class="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50">Cancelar</button>
-                         <button type="submit" class="px-4 py-2 bg-primary-600 text-white rounded-md text-sm font-medium hover:bg-primary-700 shadow-sm">Salvar</button>
-                    </div>
-                </form>
-            </div>
-        </div>
-    </div>
-
-    <!-- Pedido Modal -->
-    <div id="modal-pedido" class="relative z-50 hidden">
-        <div class="fixed inset-0 bg-gray-900/75 backdrop-blur-sm transition-opacity"></div>
-        <div class="fixed inset-0 z-10 overflow-y-auto">
-            <div class="flex min-h-full items-center justify-center p-4 text-center sm:p-0">
-                <div class="relative transform overflow-hidden rounded-lg bg-white text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-4xl">
-                    <form id="form-pedido" class="flex flex-col h-full">
-                        <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-                            <div class="flex items-center justify-between mb-4 border-b pb-2">
-                                <h3 class="text-lg font-bold leading-6 text-gray-900 flex items-center gap-2">
-                                    <svg class="h-6 w-6 text-primary-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-                                    Detalhes da Solicitação
+        <!-- MODALS -->
+        
+        <!-- Modal Unidade (NOVO) -->
+        <div id="modal-unidade" class="relative z-50 hidden">
+            <div class="fixed inset-0 bg-gray-900/75 backdrop-blur-sm transition-opacity"></div>
+            <div class="fixed inset-0 z-10 overflow-y-auto">
+                <div class="flex min-h-full items-center justify-center p-4 text-center sm:p-0">
+                    <div class="relative transform overflow-hidden rounded-lg bg-white text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-2xl">
+                        <form id="form-unidade" class="flex flex-col h-full">
+                            <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                                <h3 id="modal-unidade-title" class="text-lg font-bold leading-6 text-gray-900 mb-4 flex items-center gap-2">
+                                    <svg class="h-6 w-6 text-primary-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" /></svg>
+                                    Cadastro de Unidade
                                 </h3>
-                                <button type="button" id="btn-return-group" onclick="returnToGroupModal()" class="hidden text-sm text-gray-500 hover:text-gray-700 flex items-center gap-1">
-                                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 15l-3-3m0 0l3-3m-3 3h8M3 12a9 9 0 1118 0 9 9 0 01-18 0z" /></svg>
-                                    Voltar para o Grupo
-                                </button>
-                            </div>
-                            
-                            <div class="grid grid-cols-12 gap-4">
-                                <!-- Search -->
-                                <div class="col-span-12 relative">
-                                    <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Buscar Produto (Auto-preenchimento)</label>
-                                    <input type="text" id="inp-search" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-gray-50 placeholder-gray-400">
-                                    <div id="pedido-results" class="absolute bg-white border border-gray-200 w-full mt-1 max-h-40 overflow-auto z-20 shadow-lg rounded-md"></div>
-                                </div>
-
-                                <!-- Basic Info -->
-                                <div class="col-span-4">
-                                    <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Unidade</label>
-                                    <select name="unidade" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border"></select>
-                                </div>
-                                <div class="col-span-4">
-                                    <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Demandante</label>
-                                    <input name="nomeDemandante" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                                </div>
-                                <div class="col-span-2">
-                                    <label class="block text-xs font-medium text-gray-500 uppercase mb-1">CR</label>
-                                    <input name="cr" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                                </div>
-                                <div class="col-span-2">
-                                    <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Projeto</label>
-                                    <input name="projeto" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                                </div>
-
-                                <!-- Product Info -->
-                                <div class="col-span-8">
-                                    <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Nome do Produto/Serviço</label>
-                                    <input name="nomeProduto" required class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                                </div>
-                                
-                                <div class="col-span-4">
-                                    <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Variação</label>
-                                    <input name="variacao" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                                </div>
-                                <div class="col-span-4">
-                                    <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Cód. Produto</label>
-                                    <input name="codigoProduto" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                                </div>
-                                <div class="col-span-8"></div> <!-- Spacer -->
-
-                                <!-- Values -->
-                                <div class="col-span-8 grid grid-cols-3 gap-4">
-                                    <div>
-                                        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Qtd</label>
-                                        <input type="number" id="inp-qtd" name="quantidade" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                                    </div>
-                                    <div>
-                                        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Valor Unit.</label>
-                                        <input type="number" step="0.01" id="inp-val" name="valorUnitario" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                                    </div>
-                                    <div>
-                                        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Total</label>
-                                        <input type="number" id="inp-tot" name="valorTotal" readonly class="block w-full rounded-md border-gray-300 bg-gray-100 shadow-sm sm:text-sm p-2 border cursor-not-allowed font-bold text-gray-700">
-                                    </div>
-                                </div>
-
-                                <div class="col-span-12">
-                                    <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Observações</label>
-                                    <textarea name="descricao" rows="2" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border"></textarea>
-                                </div>
-                                
-                                <!-- Attachments -->
-                                <div class="col-span-6">
-                                    <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Anexar Orçamento</label>
-                                    <input type="file" name="fileOrc" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100">
-                                </div>
-                                <div class="col-span-6">
-                                    <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Anexar Nota Fiscal</label>
-                                    <input type="file" name="fileNF" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100">
-                                </div>
-                            </div>
-
-                            <!-- Admin Area -->
-                            <div id="modal-admin-area" class="mt-6 pt-4 border-t border-gray-200 bg-gray-50 -mx-6 px-6 pb-2 hidden">
-                                <h4 class="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">Gestão de Aquisições</h4>
                                 <div class="grid grid-cols-12 gap-4">
-                                    <div class="col-span-4">
-                                        <label class="block text-xs font-medium text-gray-500 mb-1">Modalidade</label>
-                                        <select name="modalidade" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-white"></select>
-                                    </div>
-                                    <div class="col-span-4">
-                                        <label class="block text-xs font-medium text-gray-500 mb-1">Grupo</label>
-                                        <select name="grupoDeCompra" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-white"></select>
-                                    </div>
-                                    <div class="col-span-4">
-                                        <label class="block text-xs font-medium text-gray-500 mb-1">Status</label>
-                                        <select name="status" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-white"></select>
-                                    </div>
-                                    <div class="col-span-3">
-                                        <label class="block text-xs font-medium text-gray-500 mb-1">Nº RN</label>
-                                        <input name="numRN" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-white">
-                                    </div>
-                                    <div class="col-span-3">
-                                        <label class="block text-xs font-medium text-gray-500 mb-1">Data RN</label>
-                                        <input name="dataAberturaRN" type="date" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-white">
-                                    </div>
-                                    <div class="col-span-3">
-                                        <label class="block text-xs font-medium text-gray-500 mb-1">Nº OC</label>
-                                        <input name="numOC" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-white">
-                                    </div>
-                                    <div class="col-span-3">
-                                        <label class="block text-xs font-medium text-gray-500 mb-1">Previsão</label>
-                                        <input name="dataPrevisao" type="date" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-white">
-                                    </div>
-                                    <!-- FORNECEDOR -->
                                     <div class="col-span-6">
-                                        <label class="block text-xs font-medium text-gray-500 mb-1">Fornecedor Definido</label>
-                                        <input list="fornecedores-datalist" name="fornecedor" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-white" placeholder="Digite para buscar...">
-                                        <datalist id="fornecedores-datalist"></datalist>
+                                        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Empresa</label>
+                                        <input name="empresa" required class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
                                     </div>
-                                      <!-- SEGMENTO -->
-                                      <div class="col-span-6">
-                                          <label class="block text-xs font-medium text-gray-500 mb-1">Segmento</label>
-                                          <input name="segmento" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-white">
-                                        </div>
+                                    <div class="col-span-6">
+                                        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Filial</label>
+                                        <input name="filial" required class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                                    </div>
+                                    <div class="col-span-6">
+                                        <label class="block text-xs font-medium text-gray-700 uppercase mb-1">CNPJ/CPF</label>
+                                        <input name="cnpj" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                                    </div>
+                                    <div class="col-span-6">
+                                        <label class="block text-xs font-medium text-gray-700 uppercase mb-1">IE</label>
+                                        <input name="ie" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                                    </div>
+                                    <div class="col-span-6">
+                                        <label class="block text-xs font-medium text-gray-700 uppercase mb-1">Telefone</label>
+                                        <input name="telefone" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                                    </div>
+                                    <div class="col-span-6">
+                                        <label class="block text-xs font-medium text-gray-700 uppercase mb-1">Contato</label>
+                                        <input name="contato" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                                    </div>
+                                    <div class="col-span-6">
+                                        <label class="block text-xs font-medium text-gray-700 uppercase mb-1">Email</label>
+                                        <input name="email" type="email" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                                    </div>
+                                    <div class="col-span-6">
+                                        <label class="block text-xs font-medium text-gray-700 uppercase mb-1">CEP</label>
+                                        <input name="cep" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                                    </div>
+                                    <div class="col-span-9">
+                                        <label class="block text-xs font-medium text-gray-700 uppercase mb-1">Endereço</label>
+                                        <input name="endereco" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                                    </div>
+                                    <div class="col-span-3">
+                                        <label class="block text-xs font-medium text-gray-700 uppercase mb-1">Número</label>
+                                        <input name="numero" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                                    </div>
+                                    <div class="col-span-4">
+                                        <label class="block text-xs font-medium text-gray-700 uppercase mb-1">Bairro</label>
+                                        <input name="bairro" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                                    </div>
+                                    <div class="col-span-4">
+                                        <label class="block text-xs font-medium text-gray-700 uppercase mb-1">Complemento</label>
+                                        <input name="complemento" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                                    </div>
+                                    <div class="col-span-4">
+                                        <label class="block text-xs font-medium text-gray-700 uppercase mb-1">Município</label>
+                                        <input name="municipio" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                                    </div>
                                 </div>
                             </div>
+                            <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse border-t border-gray-200">
+                                <button type="submit" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-primary-600 text-base font-medium text-white hover:bg-primary-700 focus:outline-none sm:ml-3 sm:w-auto sm:text-sm">Salvar Unidade</button>
+                                <button type="button" onclick="closeUnidadeModal()" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">Cancelar</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Modal Serviço (NOVO) -->
+        <div id="modal-servico" class="relative z-50 hidden">
+            <div class="fixed inset-0 bg-gray-900/75 backdrop-blur-sm transition-opacity"></div>
+            <div class="fixed inset-0 z-10 overflow-y-auto">
+                <div class="flex min-h-full items-center justify-center p-4 text-center sm:p-0">
+                    <div class="relative transform overflow-hidden rounded-lg bg-white text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-2xl">
+                        <form id="form-servico" class="flex flex-col h-full">
+                            <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                                <h3 class="text-lg font-bold leading-6 text-gray-900 mb-4 flex items-center gap-2">
+                                    <svg class="h-6 w-6 text-primary-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                                    Nova Solicitação de Serviço
+                                </h3>
+                                
+                                <div class="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Unidade</label>
+                                        <select name="unidade" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border"></select>
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">CR</label>
+                                        <input name="cr" required class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                                    </div>
+                                    <div class="col-span-2">
+                                        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Projeto</label>
+                                        <input name="projeto" required class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                                    </div>
+                                    <div class="col-span-2">
+                                        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Descrição do Serviço</label>
+                                        <textarea name="descricao" required rows="3" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border"></textarea>
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Data Prevista Execução</label>
+                                        <input name="dataPrevisao" type="date" required class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Fornecedor Sugerido</label>
+                                        <input list="fornecedores-datalist-servico" name="fornecedor" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border" placeholder="Busque ou digite...">
+                                        <datalist id="fornecedores-datalist-servico"></datalist>
+                                    </div>
+                                    <div class="col-span-2">
+                                        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Anexar Orçamento</label>
+                                        <input type="file" name="fileOrc" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100">
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse border-t border-gray-200">
+                                <button type="submit" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-primary-600 text-base font-medium text-white hover:bg-primary-700 focus:outline-none sm:ml-3 sm:w-auto sm:text-sm">Solicitar Serviço</button>
+                                <button type="button" onclick="closeServicoModal()" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">Cancelar</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Modal NF Upload (NOVO) -->
+        <div id="modal-nf" class="relative z-50 hidden">
+            <div class="fixed inset-0 bg-gray-900/75 backdrop-blur-sm"></div>
+            <div class="fixed inset-0 z-10 flex items-center justify-center p-4">
+                <div class="bg-white rounded-lg shadow-xl w-full max-w-md p-6">
+                    <h3 class="text-lg font-bold mb-4 text-gray-900">Anexar Nota Fiscal / Edição Financeira</h3>
+                    <form id="form-nf-upload" class="space-y-4">
+                        <div class="bg-blue-50 border border-blue-100 p-3 rounded text-sm text-blue-800">
+                            Ao anexar a NF, os itens serão marcados automaticamente como <strong>Entregue</strong> na data de hoje.
                         </div>
-                        <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse border-t border-gray-200">
-                            <button type="submit" id="btn-save-pedido" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-primary-600 text-base font-medium text-white hover:bg-primary-700 focus:outline-none sm:ml-3 sm:w-auto sm:text-sm">Salvar</button>
-                            <button type="button" onclick="closePedidoModal()" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">Cancelar</button>
+    
+                        <!-- Campos Financeiros - Visível apenas para Aquisições/Admin -->
+                        <div id="nf-admin-fields" class="space-y-4 border-t border-gray-200 pt-4 hidden">
+                             <h4 class="text-xs font-bold text-gray-500 uppercase tracking-wider">Dados Financeiros (NF)</h4>
+                             <div class="grid grid-cols-2 gap-4">
+                                 <div>
+                                     <label class="block text-xs font-medium text-gray-700 mb-1">FIN</label>
+                                     <input name="fin" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                                 </div>
+                                 <div>
+                                     <label class="block text-xs font-medium text-gray-700 mb-1">Modalidade NF</label>
+                                     <select name="modalidadeNF" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-white">
+                                         <option value="Produto">Produto</option>
+                                         <option value="Serviço">Serviço</option>
+                                     </select>
+                                 </div>
+                                 <div>
+                                     <label class="block text-xs font-medium text-gray-700 mb-1">Data Emissão NF</label>
+                                     <input name="dataEmissao" type="date" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                                 </div>
+                                 <div>
+                                     <label class="block text-xs font-medium text-gray-700 mb-1">Data Vcto</label>
+                                     <input name="dataVcto" type="date" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                                 </div>
+                             </div>
+                        </div>
+                        
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Arquivo da NF</label>
+                            <!-- Adicionei data-currentnfurl no form para rastrear se já existe NF -->
+                            <input type="file" id="file-nf-upload" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100">
+                        </div>
+                        <div class="flex justify-end gap-2 pt-2">
+                             <button type="button" onclick="closeNFModal()" class="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50">Cancelar</button>
+                             <button type="submit" class="px-4 py-2 bg-green-600 text-white rounded-md text-sm font-medium hover:bg-green-700 shadow-sm">Salvar Dados e Recebimento</button>
                         </div>
                     </form>
                 </div>
             </div>
         </div>
-    </div>
-
-    <!-- Modal Detalhes Grupo RN (COM EDIÇÃO) -->
-    <div id="modal-group" class="relative z-50 hidden">
-        <div class="fixed inset-0 bg-gray-900/75 backdrop-blur-sm"></div>
-        <div class="fixed inset-0 z-10 overflow-y-auto">
-            <div class="flex min-h-full items-center justify-center p-4">
-                <div class="bg-white rounded-lg shadow-xl w-full max-w-3xl p-6">
-                    <div class="flex justify-between items-center mb-6 border-b pb-4">
-                        <h3 class="text-xl font-bold text-gray-900" id="group-modal-title">Gerir Agrupamento</h3>
-                        <button onclick="closeGroupModal()" class="text-gray-400 hover:text-gray-500">
-                            <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
-                        </button>
-                    </div>
-
-                    <!-- Edit Section -->
-                    <div class="bg-gray-50 p-4 rounded mb-4 border border-gray-200 grid grid-cols-3 gap-4 items-end">
+    
+        <!-- Modal Cotação (Novo) -->
+        <div id="modal-ficha-cotacao" class="relative z-50 hidden">
+            <div class="fixed inset-0 bg-gray-900/75 backdrop-blur-sm"></div>
+            <div class="fixed inset-0 z-10 flex items-center justify-center p-4">
+                <div class="bg-white rounded-lg shadow-xl w-full max-w-md p-6">
+                    <h3 class="text-lg font-bold mb-4 text-gray-900">Gerar Ficha de Cotação (PDF)</h3>
+                    <p class="text-sm text-gray-600 mb-4">Selecione a unidade que será a emissora oficial no documento.</p>
+                    <div class="space-y-4">
                         <div>
-                            <label class="block text-xs font-bold text-gray-600 uppercase mb-1">Número da RN</label>
-                            <input id="group-rn-edit" class="block w-full rounded border-gray-300 shadow-sm p-2 text-sm">
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Unidade Emissora</label>
+                            <select id="select-unidade-cotacao" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border"></select>
                         </div>
-                         <!-- ADDED OC FIELD -->
-                        <div>
-                            <label class="block text-xs font-bold text-gray-600 uppercase mb-1">Número da OC</label>
-                            <input id="group-oc-edit" class="block w-full rounded border-gray-300 shadow-sm p-2 text-sm">
-                        </div>
-                        <div>
-                            <label class="block text-xs font-bold text-gray-600 uppercase mb-1">Data Abertura</label>
-                            <input type="date" id="group-date-edit" class="block w-full rounded border-gray-300 shadow-sm p-2 text-sm">
-                        </div>
-                        <div class="col-span-3 flex justify-end">
-                            <button id="btn-save-rn-data" onclick="updateGroupData()" class="bg-blue-600 text-white px-4 py-2 rounded shadow text-sm font-bold h-10 hover:bg-blue-700">Salvar Dados da RN</button>
+                        <div class="flex justify-end gap-2 pt-2">
+                            <button type="button" onclick="closeCotacaoModal()" class="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50">Cancelar</button>
+                            <button type="button" id="btn-gerar-ficha" onclick="generateCotacaoFicha()" class="px-4 py-2 bg-green-600 text-white rounded-md text-sm font-medium hover:bg-green-700 shadow-sm">Gerar Documento</button>
                         </div>
                     </div>
-                    
-                    <!-- Batch Update Status -->
-                    <div id="group-batch-status-container" class="bg-yellow-50 border border-yellow-200 p-4 rounded-md mb-6 flex items-end gap-4">
-                        <div class="flex-1">
-                            <label class="block text-xs font-bold text-yellow-800 uppercase mb-1">Atualizar Status de Todos</label>
-                            <select id="group-status-select" class="block w-full rounded-md border-yellow-300 shadow-sm focus:border-yellow-500 focus:ring-yellow-500 sm:text-sm p-2 bg-white">
-                                <option value="a-abrir-rn">A Abrir RN</option>
+                </div>
+            </div>
+        </div>
+    
+        <!-- Modal Fornecedor -->
+        <div id="modal-fornecedor" class="relative z-50 hidden">
+            <div class="fixed inset-0 bg-gray-900/75 backdrop-blur-sm"></div>
+            <div class="fixed inset-0 z-10 flex items-center justify-center p-4">
+                <div class="bg-white rounded-lg shadow-xl w-full max-w-md p-6">
+                    <h3 class="text-lg font-bold mb-4">Novo Fornecedor</h3>
+                    <form id="form-fornecedor" class="space-y-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Nome / Razão Social</label>
+                            <input name="nome" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">CNPJ</label>
+                            <input name="cnpj" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                        </div>
+                        <!-- NOVO CAMPO: Segmento -->
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Segmento</label>
+                            <input name="segmento" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                        </div>
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">E-mail</label>
+                                <input name="email" type="email" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">Telefone</label>
+                                <input name="telefone" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Endereço</label>
+                            <input name="endereco" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                        </div>
+                        <div class="flex justify-end gap-2 pt-2">
+                             <button type="button" onclick="closeFornecedorModal()" class="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50">Cancelar</button>
+                             <button type="submit" class="px-4 py-2 bg-primary-600 text-white rounded-md text-sm font-medium hover:bg-primary-700 shadow-sm">Salvar</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    
+        <!-- Modal Anexos (NOVO) -->
+        <div id="modal-anexos" class="relative z-50 hidden">
+            <div class="fixed inset-0 bg-gray-900/75 backdrop-blur-sm transition-opacity"></div>
+            <div class="fixed inset-0 z-10 flex items-center justify-center p-4">
+                <div class="bg-white rounded-lg shadow-xl w-full max-w-sm p-6">
+                    <h3 class="text-lg font-bold mb-4 text-gray-900 border-b pb-2">Arquivos Anexados</h3>
+                    <div id="attachments-list" class="max-h-80 overflow-y-auto divide-y divide-gray-100">
+                        <!-- Links preenchidos via JS -->
+                    </div>
+                    <div class="flex justify-end pt-4">
+                         <button type="button" onclick="closeAttachmentsModal()" class="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50">Fechar</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    
+    
+        <!-- Pedido Modal -->
+        <div id="modal-pedido" class="relative z-50 hidden">
+            <div class="fixed inset-0 bg-gray-900/75 backdrop-blur-sm transition-opacity"></div>
+            <div class="fixed inset-0 z-10 overflow-y-auto">
+                <div class="flex min-h-full items-center justify-center p-4 text-center sm:p-0">
+                    <div class="relative transform overflow-hidden rounded-lg bg-white text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-4xl">
+                        <form id="form-pedido" class="flex flex-col h-full">
+                            <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                                <div class="flex items-center justify-between mb-4 border-b pb-2">
+                                    <h3 class="text-lg font-bold leading-6 text-gray-900 flex items-center gap-2">
+                                        <svg class="h-6 w-6 text-primary-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                                        Detalhes da Solicitação
+                                    </h3>
+                                    <button type="button" id="btn-return-group" onclick="returnToGroupModal()" class="hidden text-sm text-gray-500 hover:text-gray-700 flex items-center gap-1">
+                                        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 15l-3-3m0 0l3-3m-3 3h8M3 12a9 9 0 1118 0 9 9 0 01-18 0z" /></svg>
+                                        Voltar para o Grupo
+                                    </button>
+                                </div>
+                                
+                                <div class="grid grid-cols-12 gap-4">
+                                    <!-- Search -->
+                                    <div class="col-span-12 relative">
+                                        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Buscar Produto (Auto-preenchimento)</label>
+                                        <input type="text" id="inp-search" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-gray-50 placeholder-gray-400">
+                                        <div id="pedido-results" class="absolute bg-white border border-gray-200 w-full mt-1 max-h-40 overflow-auto z-20 shadow-lg rounded-md"></div>
+                                    </div>
+    
+                                    <!-- Basic Info -->
+                                    <div class="col-span-4">
+                                        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Unidade</label>
+                                        <select name="unidade" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border"></select>
+                                    </div>
+                                    <div class="col-span-4">
+                                        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Demandante</label>
+                                        <input name="nomeDemandante" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                                    </div>
+                                    <div class="col-span-2">
+                                        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">CR</label>
+                                        <input name="cr" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                                    </div>
+                                    <div class="col-span-2">
+                                        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Projeto</label>
+                                        <input name="projeto" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                                    </div>
+    
+                                    <!-- Product Info -->
+                                    <div class="col-span-8">
+                                        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Nome do Produto/Serviço</label>
+                                        <input name="nomeProduto" required class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                                    </div>
+                                    
+                                    <div class="col-span-4">
+                                        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Variação</label>
+                                        <input name="variacao" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                                    </div>
+                                    <div class="col-span-4">
+                                        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Cód. Produto</label>
+                                        <input name="codigoProduto" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                                    </div>
+                                    <div class="col-span-8"></div> <!-- Spacer -->
+    
+                                    <!-- Values -->
+                                    <div class="col-span-8 grid grid-cols-3 gap-4">
+                                        <div>
+                                            <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Qtd</label>
+                                            <input type="number" id="inp-qtd" name="quantidade" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                                        </div>
+                                        <div>
+                                            <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Valor Unit.</label>
+                                            <input type="number" step="0.01" id="inp-val" name="valorUnitario" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                                        </div>
+                                        <div class="col-span-3">
+                                            <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Valor Total</label>
+                                            <!-- Campo Valor Total agora tem 100% da largura da coluna 8 -->
+                                            <input type="number" id="inp-tot" name="valorTotal" readonly class="block w-full rounded-md border-gray-300 bg-gray-100 shadow-sm sm:text-sm p-2 border cursor-not-allowed font-bold text-gray-700">
+                                        </div>
+                                    </div>
+    
+                                    <div class="col-span-12">
+                                        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Observações</label>
+                                        <textarea name="descricao" rows="2" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border"></textarea>
+                                    </div>
+                                    
+                                    <!-- Attachments (NOVO CAMPO DE MÚLTIPLOS ARQUIVOS) -->
+                                    <div class="col-span-12 flex items-end gap-4">
+                                        <div class="flex-1">
+                                            <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Anexar Arquivos (Orçamentos, Documentos, etc.)</label>
+                                            <input type="file" name="fileAttachments" multiple class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100">
+                                        </div>
+                                        <!-- Botão de ver anexos (SÓ MOSTRA NA EDIÇÃO) -->
+                                         <button type="button" onclick="const p = state.pedidos.find(x=>x.id==='${id}'); if(p && p.urlAnexos && p.urlAnexos.length > 0) openAttachmentsModal(p.urlAnexos);" 
+                                                 class="flex-shrink-0 inline-flex items-center px-3 py-2 border border-gray-300 text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none" 
+                                                 title="Ver anexos existentes">
+                                                 <svg class="w-5 h-5 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+                                                 Ver Anexos
+                                         </button>
+                                    </div>
+    
+    
+                                </div>
+    
+                                <!-- Admin Area -->
+                                <div id="modal-admin-area" class="mt-6 pt-4 border-t border-gray-200 bg-gray-50 -mx-6 px-6 pb-2 hidden">
+                                    <h4 class="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">Gestão de Aquisições</h4>
+                                    <div class="grid grid-cols-12 gap-4">
+                                        <div class="col-span-4">
+                                            <label class="block text-xs font-medium text-gray-500 mb-1">Modalidade</label>
+                                            <select name="modalidade" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-white"></select>
+                                        </div>
+                                        <div class="col-span-4">
+                                            <label class="block text-xs font-medium text-gray-500 mb-1">Grupo</label>
+                                            <select name="grupoDeCompra" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-white"></select>
+                                        </div>
+                                        <div class="col-span-4">
+                                            <label class="block text-xs font-medium text-gray-500 mb-1">Status</label>
+                                            <select name="status" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-white"></select>
+                                        </div>
+                                        <div class="col-span-3">
+                                            <label class="block text-xs font-medium text-gray-500 mb-1">Nº RN</label>
+                                            <input name="numRN" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-white">
+                                        </div>
+                                        <div class="col-span-3">
+                                            <label class="block text-xs font-medium text-gray-500 mb-1">Data RN</label>
+                                            <input name="dataAberturaRN" type="date" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-white">
+                                        </div>
+                                        <div class="col-span-3">
+                                            <label class="block text-xs font-medium text-gray-500 mb-1">Nº OC</label>
+                                            <input name="numOC" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-white">
+                                        </div>
+                                        <div class="col-span-3">
+                                            <label class="block text-xs font-medium text-gray-500 mb-1">Previsão</label>
+                                            <input name="dataPrevisao" type="date" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-white">
+                                        </div>
+                                        <!-- FORNECEDOR -->
+                                        <div class="col-span-6">
+                                            <label class="block text-xs font-medium text-gray-500 mb-1">Fornecedor Definido</label>
+                                            <input list="fornecedores-datalist" name="fornecedor" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-white" placeholder="Digite para buscar...">
+                                            <datalist id="fornecedores-datalist"></datalist>
+                                        </div>
+                                          <!-- SEGMENTO -->
+                                          <div class="col-span-6">
+                                              <label class="block text-xs font-medium text-gray-500 mb-1">Segmento</label>
+                                              <input name="segmento" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-white">
+                                            </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse border-t border-gray-200">
+                                <button type="submit" id="btn-save-pedido" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-primary-600 text-base font-medium text-white hover:bg-primary-700 focus:outline-none sm:ml-3 sm:w-auto sm:text-sm">Salvar</button>
+                                <button type="button" onclick="closePedidoModal()" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">Cancelar</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+    
+        <!-- Modal Detalhes Grupo RN (COM EDIÇÃO) -->
+        <div id="modal-group" class="relative z-50 hidden">
+            <div class="fixed inset-0 bg-gray-900/75 backdrop-blur-sm"></div>
+            <div class="fixed inset-0 z-10 overflow-y-auto">
+                <div class="flex min-h-full items-center justify-center p-4">
+                    <div class="bg-white rounded-lg shadow-xl w-full max-w-3xl p-6">
+                        <div class="flex justify-between items-center mb-6 border-b pb-4">
+                            <h3 class="text-xl font-bold text-gray-900" id="group-modal-title">Gerir Agrupamento</h3>
+                            <button onclick="closeGroupModal()" class="text-gray-400 hover:text-gray-500">
+                                <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+                            </button>
+                        </div>
+    
+                        <!-- Edit Section (Combined Acquisition Data) -->
+                        <div class="bg-gray-50 p-4 rounded mb-4 border border-gray-200 grid grid-cols-4 gap-4 items-end">
+                            <div class="col-span-4 border-b border-gray-300 pb-2 mb-2">
+                                 <h4 class="text-sm font-bold text-gray-700 uppercase tracking-wider">Dados de Registro (RN/OC)</h4>
+                            </div>
+                            
+                            <!-- Linha 1: RN, Data RN, OC, Previsão -->
+                            <div>
+                                <label class="block text-xs font-bold text-gray-600 uppercase mb-1">Nº RN</label>
+                                <input id="group-rn-edit" class="block w-full rounded border-gray-300 shadow-sm p-2 text-sm">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-bold text-gray-600 uppercase mb-1">Data RN</label>
+                                <input type="date" id="group-date-edit" class="block w-full rounded border-gray-300 shadow-sm p-2 text-sm">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-bold text-gray-600 uppercase mb-1">Nº OC</label>
+                                <input id="group-oc-edit" class="block w-full rounded border-gray-300 shadow-sm p-2 text-sm">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-bold text-gray-600 uppercase mb-1">Previsão</label>
+                                <input type="date" id="group-previsao-edit" class="block w-full rounded border-gray-300 shadow-sm p-2 text-sm">
+                            </div>
+    
+                            <!-- Linha 2: Fornecedor, Segmento -->
+                            <div class="col-span-2">
+                                <label class="block text-xs font-bold text-gray-600 uppercase mb-1">Fornecedor Definido</label>
+                                <input id="group-fornecedor-edit" list="fornecedores-datalist" class="block w-full rounded border-gray-300 shadow-sm p-2 text-sm" placeholder="Digite para buscar...">
+                            </div>
+                            <div class="col-span-2">
+                                <label class="block text-xs font-bold text-gray-600 uppercase mb-1">Segmento</label>
+                                <input id="group-segmento-edit" class="block w-full rounded border-gray-300 shadow-sm p-2 text-sm">
+                            </div>
+                            
+                            <!-- Linha 3: Modalidade, Grupo -->
+                            <div>
+                                <label class="block text-xs font-bold text-gray-600 uppercase mb-1">Modalidade</label>
+                                <select id="group-modalidade-select" class="block w-full rounded border-gray-300 shadow-sm p-2 text-sm bg-white"></select>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-bold text-gray-600 uppercase mb-1">Grupo de Compra</label>
+                                <select id="group-grupo-select" class="block w-full rounded border-gray-300 shadow-sm p-2 text-sm bg-white"></select>
+                            </div>
+    
+                            <div class="col-span-2 flex justify-end">
+                                <button id="btn-save-rn-data" onclick="updateGroupData()" class="bg-blue-600 text-white px-4 py-2 rounded shadow text-sm font-bold h-10 hover:bg-blue-700">Salvar Dados de Aquisição</button>
+                            </div>
+                        </div>
+                        <!-- FIM: Edit Section (Combined Acquisition Data) -->
+                        
+                        <!-- Batch Update Status -->
+                        <div id="group-batch-status-container" class="bg-yellow-50 border border-yellow-200 p-4 rounded-md mb-6 flex items-end gap-4">
+                            <div class="flex-1">
+                                <label class="block text-xs font-bold text-yellow-800 uppercase mb-1">Atualizar Status de Todos</label>
+                                <select id="group-status-select" class="block w-full rounded-md border-yellow-300 shadow-sm focus:border-yellow-500 focus:ring-yellow-500 sm:text-sm p-2 bg-white">
+                                    <option value="enviado-aquisicao">Enviado p/ Aquisição</option>
+                                    <option value="a-abrir-rn">A Abrir RN</option>
+                                    <option value="em-cotacao">Em Cotação</option>
+                                    <option value="registrado">Registrado</option>
+                                    <option value="aguardando-entrega">Aguardando Entrega</option>
+                                    <option value="entregue">Entregue</option>
+                                    <option value="finalizado">Finalizado</option>
+                                </select>
+                            </div>
+                            <button id="btn-update-status" onclick="updateGroupStatus()" class="bg-yellow-600 text-white px-4 py-2 rounded hover:bg-yellow-700 shadow-sm text-sm font-bold h-10">Atualizar Status</button>
+                        </div>
+    
+                        <div class="overflow-hidden rounded-lg border border-gray-200">
+                            <table class="min-w-full divide-y divide-gray-200">
+                                <thead class="bg-gray-50">
+                                    <tr>
+                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Item / Unidade / CR</th>
+                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Projeto</th>
+                                        <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase w-24">Vl. Unitário</th>
+                                        <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase w-24">Vl. Total</th>
+                                        <th class="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase w-32">Ações</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="group-items-body" class="bg-white divide-y divide-gray-200"></tbody>
+                                <tfoot class="bg-gray-50">
+                                    <tr>
+                                        <td colspan="3" class="px-4 py-2 text-right font-bold text-gray-700">Total do Agrupamento:</td>
+                                        <td class="px-4 py-2 text-right font-bold text-primary-700" id="group-total-display">R$ 0.00</td>
+                                        <td></td>
+                                    </tr>
+                                </tfoot>
+                            </table>
+                        </div>
+                        <div class="flex justify-end pt-4">
+                             <button id="btn-group-ficha-cotacao" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none">
+                                <svg class="mr-2 -ml-1 h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                                Gerar Ficha Cotação (Agrup.)
+                             </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    
+        <!-- Modal Agrupar (Vincular RN) -->
+        <div id="modal-agrupar" class="relative z-50 hidden">
+            <div class="fixed inset-0 bg-gray-900/75 backdrop-blur-sm"></div>
+            <div class="fixed inset-0 z-10 flex items-center justify-center">
+                <div class="bg-white p-6 rounded-lg shadow-xl max-w-sm w-full">
+                    <h3 class="font-bold text-lg mb-4 text-gray-900">Criar Grupo em Lote</h3>
+                    <form id="form-agrupar" class="space-y-4">
+                        
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Fornecedor</label>
+                            <input list="fornecedores-datalist" name="fornecedor" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border" placeholder="Digite o nome do fornecedor">
+                            <datalist id="fornecedores-datalist"></datalist>
+                        </div>
+                        
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Status (Próximo Passo)</label>
+                            <select name="status" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-white">
+                                <!-- Opções Filtradas para o fluxo inicial de agrupamento -->
                                 <option value="em-cotacao">Em Cotação</option>
                                 <option value="registrado">Registrado</option>
                                 <option value="aguardando-entrega">Aguardando Entrega</option>
                                 <option value="entregue">Entregue</option>
-                                <option value="finalizado">Finalizado</option>
                             </select>
                         </div>
-                        <button id="btn-update-status" onclick="updateGroupStatus()" class="bg-yellow-600 text-white px-4 py-2 rounded hover:bg-yellow-700 shadow-sm text-sm font-bold h-10">Atualizar Status</button>
-                    </div>
-
-                    <div class="overflow-hidden rounded-lg border border-gray-200">
-                        <table class="min-w-full divide-y divide-gray-200">
-                            <thead class="bg-gray-50">
-                                <tr>
-                                    <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Unidade</th>
-                                    <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Produto</th>
-                                    <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">Valor</th>
-                                    <th class="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase">Ações</th>
-                                </tr>
-                            </thead>
-                            <tbody id="group-items-body" class="bg-white divide-y divide-gray-200"></tbody>
-                            <tfoot class="bg-gray-50">
-                                <tr>
-                                    <td colspan="2" class="px-4 py-2 text-right font-bold text-gray-700">Total do Agrupamento:</td>
-                                    <td class="px-4 py-2 text-right font-bold text-primary-700" id="group-total-display">R$ 0.00</td>
-                                    <td></td>
-                                </tr>
-                            </tfoot>
-                        </table>
-                    </div>
-                    <div class="flex justify-end pt-4">
-                         <button id="btn-group-ficha-cotacao" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none">
-                            <svg class="mr-2 -ml-1 h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-                            Gerar Ficha Cotação (Agrup.)
-                         </button>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Modal Agrupar (Vincular RN) -->
-    <div id="modal-agrupar" class="relative z-50 hidden">
-        <div class="fixed inset-0 bg-gray-900/75 backdrop-blur-sm"></div>
-        <div class="fixed inset-0 z-10 flex items-center justify-center">
-            <div class="bg-white p-6 rounded-lg shadow-xl max-w-sm w-full">
-                <h3 class="font-bold text-lg mb-4 text-gray-900">Vincular Seleção à RN</h3>
-                <form id="form-agrupar" class="space-y-4">
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700">Número da RN (Opcional)</label>
-                        <input name="numRN" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border" placeholder="Deixe vazio para marcar como pendente">
-                    </div>
-                    <!-- ADDED OC FIELD -->
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700">Número da OC (Opcional)</label>
-                        <input name="numOC" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700">Data de Abertura (Opcional)</label>
-                        <input name="dataAberturaRN" type="date" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                    </div>
-                    <div class="flex justify-end gap-2 pt-2">
-                         <button type="button" onclick="document.getElementById('modal-agrupar').classList.add('hidden')" class="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50">Cancelar</button>
-                         <button type="submit" class="px-4 py-2 bg-primary-600 text-white rounded-md text-sm font-medium hover:bg-primary-700 shadow-sm">Salvar</button>
-                    </div>
-                </form>
-            </div>
-        </div>
-    </div>
+                        
+                        <!-- NOVO: Campo para anexar orçamentos em lote -->
+                        <div class="col-span-2">
+                            <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Anexar Orçamento (em Lote)</label>
+                            <input type="file" name="fileBulkAttachments" multiple class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100">
+                        </div>
     
-    <!-- NOVO MODAL: Confirmação Customizada -->
-    <div id="modal-confirm" class="relative z-50 hidden">
-        <div class="fixed inset-0 bg-gray-900/75 backdrop-blur-sm transition-opacity"></div>
-        <div class="fixed inset-0 z-10 flex items-center justify-center p-4">
-            <div class="bg-white rounded-lg shadow-xl w-full max-w-sm p-6 text-center">
-                <div class="flex justify-center mb-4">
-                    <svg class="h-10 w-10 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
-                </div>
-                <h3 class="text-lg font-bold mb-2 text-gray-900">Confirmação Necessária</h3>
-                <p id="confirm-message" class="text-sm text-gray-500 mb-6"></p>
-                <div class="flex justify-center gap-3">
-                    <button type="button" onclick="closeConfirmationModal()" class="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50">Cancelar</button>
-                    <button type="button" id="confirm-button" class="px-4 py-2 bg-red-600 text-white rounded-md text-sm font-medium hover:bg-red-700 shadow-sm">Confirmar</button>
+                        <div class="flex justify-end gap-2 pt-2">
+                             <button type="button" onclick="document.getElementById('modal-agrupar').classList.add('hidden')" class="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50">Cancelar</button>
+                             <button type="submit" class="px-4 py-2 bg-primary-600 text-white rounded-md text-sm font-medium hover:bg-primary-700 shadow-sm">Aplicar em Lote</button>
+                        </div>
+                    </form>
                 </div>
             </div>
         </div>
-    </div>
-
+        
+        <!-- NOVO MODAL: Confirmação Customizada -->
+        <div id="modal-confirm" class="relative z-50 hidden">
+            <div class="fixed inset-0 bg-gray-900/75 backdrop-blur-sm transition-opacity"></div>
+            <div class="fixed inset-0 z-10 flex items-center justify-center p-4">
+                <div class="bg-white rounded-lg shadow-xl w-full max-w-sm p-6 text-center">
+                    <div class="flex justify-center mb-4">
+                        <svg class="h-10 w-10 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+                    </div>
+                    <h3 class="text-lg font-bold mb-2 text-gray-900">Confirmação Necessária</h3>
+                    <p id="confirm-message" class="text-sm text-gray-500 mb-6"></p>
+                    <div class="flex justify-center gap-3">
+                        <button type="button" onclick="closeConfirmationModal()" class="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50">Cancelar</button>
+                        <button type="button" id="confirm-button" class="px-4 py-2 bg-red-600 text-white rounded-md text-sm font-medium hover:bg-red-700 shadow-sm">Confirmar</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    
+    <!-- Code injected by live-server -->
+<script>
+	// <![CDATA[  <-- For SVG support
+	if ('WebSocket' in window) {
+		(function () {
+			function refreshCSS() {
+				var sheets = [].slice.call(document.getElementsByTagName("link"));
+				var head = document.getElementsByTagName("head")[0];
+				for (var i = 0; i < sheets.length; ++i) {
+					var elem = sheets[i];
+					var parent = elem.parentElement || head;
+					parent.removeChild(elem);
+					var rel = elem.rel;
+					if (elem.href && typeof rel != "string" || rel.length == 0 || rel.toLowerCase() == "stylesheet") {
+						var url = elem.href.replace(/(&|\?)_cacheOverride=\d+/, '');
+						elem.href = url + (url.indexOf('?') >= 0 ? '&' : '?') + '_cacheOverride=' + (new Date().valueOf());
+					}
+					parent.appendChild(elem);
+				}
+			}
+			var protocol = window.location.protocol === 'http:' ? 'ws://' : 'wss://';
+			var address = protocol + window.location.host + window.location.pathname + '/ws';
+			var socket = new WebSocket(address);
+			socket.onmessage = function (msg) {
+				if (msg.data == 'reload') window.location.reload();
+				else if (msg.data == 'refreshcss') refreshCSS();
+			};
+			if (sessionStorage && !sessionStorage.getItem('IsThisFirstTime_Log_From_LiveServer')) {
+				console.log('Live reload enabled.');
+				sessionStorage.setItem('IsThisFirstTime_Log_From_LiveServer', true);
+			}
+		})();
+	}
+	else {
+		console.error('Upgrade your browser. This Browser is NOT supported WebSocket for Live-Reloading.');
+	}
+	// ]]>
+</script>
 </body>
-</html>
+    </html>
