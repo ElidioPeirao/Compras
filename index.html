@@ -1294,24 +1294,56 @@
                         <td class="px-4 py-3 text-sm text-gray-600">${f.segmento || '-'}</td>
                         <td class="px-4 py-3 text-sm text-gray-600">${f.telefone || '-'}</td>
                         <td class="px-4 py-3 text-sm text-gray-600 truncate max-w-xs" title="${f.endereco}">${f.endereco || '-'}</td>
-                        <td class="px-4 py-3 text-right">
-                            <button onclick="deleteFornecedor('${f.id}')" class="text-red-500 hover:text-red-700">
-                                <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                            </button>
-                        </td>
+                        <td class="px-4 py-3 text-right flex justify-end gap-3">
+    <button onclick="editFornecedor('${f.id}')" class="text-primary-600 hover:text-primary-800 text-sm font-medium">
+        Editar
+    </button>
+    <button onclick="deleteFornecedor('${f.id}')" class="text-red-500 hover:text-red-700">
+        <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+    </button>
+</td>
                     </tr>
                 `;
             });
         }
 
-        window.deleteFornecedor = (id) => {
+window.deleteFornecedor = (id) => {
             showConfirmationModal("Tem certeza que deseja excluir este fornecedor?", async () => {
                 try {
                     await deleteDoc(doc(db, `artifacts/${appId}/public/data/fornecedores`, id));
                     showNotification("Fornecedor removido.", "success");
                 } catch(e) { showNotification("Erro ao remover.", "error"); }
             });
+        }; // <--- FECHA AQUI O DELETE
+
+        // AGORA INICIA O EDITAR (FORA DO DELETE)
+        window.editFornecedor = (id) => {
+            // 1. Acha o fornecedor na lista local
+            const fData = state.fornecedores.find(x => x.id === id);
+            if (!fData) return;
+
+            // 2. Pega o formulário
+            const form = document.getElementById('form-fornecedor');
+            
+            // 3. Preenche os campos
+            form.nome.value = fData.nome || '';
+            form.cnpj.value = fData.cnpj || '';
+            form.segmento.value = fData.segmento || '';
+            form.email.value = fData.email || '';
+            form.telefone.value = fData.telefone || '';
+            form.endereco.value = fData.endereco || '';
+
+            // 4. Define o ID no dataset para sabermos que é uma edição
+            form.dataset.id = id;
+
+            // 5. Muda o título do modal
+            const titleEl = document.querySelector('#modal-fornecedor h3');
+            if(titleEl) titleEl.textContent = "Editar Fornecedor";
+
+            // 6. Abre o modal
+            document.getElementById('modal-fornecedor').classList.remove('hidden');
         };
+
 
         // --- MODAL GRUPO & ADMIN ---
         // Função utilitária para recalcular total do item (usada no onchange)
@@ -2170,7 +2202,13 @@
              
              // NOVO: Fornecedor Save (Abre Modal)
              document.getElementById('btn-novo-fornecedor')?.addEventListener('click', () => {
-                 document.getElementById('modal-fornecedor').classList.remove('hidden');
+    const form = document.getElementById('form-fornecedor');
+    form.reset();
+    form.dataset.id = ""; // Limpa o ID para indicar CRIAÇÃO
+    document.querySelector('#modal-fornecedor h3').textContent = "Novo Fornecedor"; // Reseta o título
+    document.getElementById('modal-fornecedor').classList.remove('hidden');
+});
+ 
              });
              // Helper global para fechar modal de fornecedor
              window.closeFornecedorModal = () => document.getElementById('modal-fornecedor').classList.add('hidden');
@@ -2334,29 +2372,41 @@
                  } catch(err){ console.error(err); showNotification("Erro ao salvar unidade.", "error"); }
              });
              
-             // NOVO: Save Fornecedor Form
-             document.getElementById('form-fornecedor').addEventListener('submit', async e => {
-                 e.preventDefault();
-                 const f = e.target;
-                 
-                 // CORREÇÃO DE BUG: Garante que os campos são lidos e salvos corretamente
-                 try {
-                      await addDoc(collection(db, `artifacts/${appId}/public/data/fornecedores`), {
-                          nome: f.nome.value, 
-                          cnpj: f.cnpj.value, 
-                          segmento: f.segmento.value, 
-                          email: f.email.value, 
-                          telefone: f.telefone.value, 
-                          endereco: f.endereco.value
-                      });
-                      showNotification("Fornecedor cadastrado!", "success");
-                      f.reset(); document.getElementById('modal-fornecedor').classList.add('hidden');
-                 } catch(err){ 
-                      console.error("ERRO AO CADASTRAR FORNECEDOR:", err);
-                      // Tentativa de mostrar a mensagem de erro do Firebase na notificação
-                      showNotification("Erro ao cadastrar fornecedor: " + (err.message || 'Verifique o console.'), "error"); 
-                 }
-             });
+             // NOVO: Save Fornecedor Form (Criar ou Editar)
+document.getElementById('form-fornecedor').addEventListener('submit', async e => {
+    e.preventDefault();
+    const f = e.target;
+    const docId = f.dataset.id; // Verifica se há um ID salvo (Edição)
+    
+    const data = {
+        nome: f.nome.value, 
+        cnpj: f.cnpj.value, 
+        segmento: f.segmento.value, 
+        email: f.email.value, 
+        telefone: f.telefone.value, 
+        endereco: f.endereco.value
+    };
+
+    try {
+        if (docId) {
+            // --- MODO EDIÇÃO ---
+            await updateDoc(doc(db, `artifacts/${appId}/public/data/fornecedores`, docId), data);
+            showNotification("Fornecedor atualizado!", "success");
+        } else {
+            // --- MODO CRIAÇÃO ---
+            await addDoc(collection(db, `artifacts/${appId}/public/data/fornecedores`), data);
+            showNotification("Fornecedor cadastrado!", "success");
+        }
+        
+        f.reset(); 
+        f.dataset.id = ""; // Limpa o ID após salvar
+        document.getElementById('modal-fornecedor').classList.add('hidden');
+        
+    } catch(err){ 
+        console.error("ERRO AO SALVAR FORNECEDOR:", err);
+        showNotification("Erro ao salvar: " + (err.message || 'Verifique o console.'), "error"); 
+    }
+});
 
 
              // Calc Total
@@ -2522,7 +2572,7 @@
                     showNotification("Selecione pedidos para gerar a ficha.", "error");
                  }
              });
-        });
+        
     </script>
 </head>
 <body class="h-full text-gray-800">
