@@ -126,7 +126,7 @@
         const STATUS_MAP = {
             // NOVO STATUS: ENVIADO PARA AQUISIÇÃO
             "enviado-aquisicao": { text: "Enviado p/ Aquisição", class: "bg-blue-200 text-blue-900 ring-blue-700/20 font-bold", iconColor: "text-blue-700", bgIcon: "bg-blue-300" },
-            "pendencia": { text: "Pendência", class: "bg-red-200 text-red-900 ring-red-700/20 font-bold", iconColor: "text-red-700", bgIcon: "bg-red-300" }, // NOVO
+
             "a-inserir-rn": { text: "A Inserir RN", class: "bg-yellow-100 text-yellow-900 ring-yellow-700/20 font-bold", iconColor: "text-yellow-700", bgIcon: "bg-yellow-200" },
 
             "a-abrir-rn": { text: "A Abrir RN", class: "bg-blue-50 text-blue-700 ring-blue-600/20", iconColor: "text-blue-600", bgIcon: "bg-blue-100" },
@@ -156,10 +156,8 @@
          * @returns {{statusCompetencia: string, statusNP707: string}}
          */
         function checkCompetenceAndNP707(dataEmissaoNF, dataDoDia, modalidadeNF) {
-            // Cria objetos Date no fuso horário local para evitar problemas de offset
-            const nfDate = new Date(dataEmissaoNF + 'T00:00:00');
-            const refDate = new Date(dataDoDia + 'T00:00:00');
-            
+            const nfDate = new Date(dataEmissaoNF);
+            const refDate = new Date(dataDoDia);
             const refMonth = refDate.getMonth();
             const refYear = refDate.getFullYear();
 
@@ -182,8 +180,7 @@
             if (dayLimit > 0) {
                 const limitDate = new Date(refYear, refMonth, dayLimit);
                 // Compara se a data de emissão NF é posterior ao limite do mês de referência
-                // Usamos >, pois se for dia 23 (limite), ainda está OK.
-                if (nfDate.getTime() > limitDate.getTime()) {
+                if (nfDate > limitDate) {
                     statusNP707 = COMPLIANCE_STATUS.NP707_FORA.text;
                 }
             }
@@ -207,16 +204,11 @@
                     }
                 } catch (e) { currentUserProfile = { nome: user.email, perfil: "Solicitante", unidade: "" }; }
 
-                // INÍCIO DA CORREÇÃO DE CRASH: Verificação de elementos antes de manipulação
-                const userNameDisplay = document.getElementById('user-name-display');
-                if (userNameDisplay) userNameDisplay.textContent = currentUserProfile.nome;
-                
-                const userRoleDisplay = document.getElementById('user-role-display');
-                if (userRoleDisplay) userRoleDisplay.textContent = currentUserProfile.perfil;
+                document.getElementById('user-name-display').textContent = currentUserProfile.nome;
+                document.getElementById('user-role-display').textContent = currentUserProfile.perfil;
 
-                if (loginPage) loginPage.classList.add('hidden');
-                if (appPage) appPage.classList.remove('hidden');
-                // FIM DA CORREÇÃO DE CRASH
+                loginPage.classList.add('hidden');
+                appPage.classList.remove('hidden');
                 
                 setupUIForProfile();
                 fetchPedidos(); 
@@ -229,8 +221,8 @@
                 showPage('dashboard');
             } else {
                 currentUser = null;
-                if (loginPage) loginPage.classList.remove('hidden');
-                if (appPage) appPage.classList.add('hidden');
+                loginPage.classList.remove('hidden');
+                appPage.classList.add('hidden');
                 if (unsubscribePedidos) unsubscribePedidos();
                 if (unsubscribeFornecedores) unsubscribeFornecedores();
                 if (unsubscribeUnidades) unsubscribeUnidades();
@@ -247,7 +239,6 @@
             const servNav = document.getElementById('nav-servicos-item');
             const solText = document.getElementById('nav-solicitacoes-text');
             const servText = document.getElementById('nav-servicos-text');
-            const servicosTitle = document.getElementById('servicos-title');
             
             // Reset. Usando ?. para evitar o erro de ReferenceError
             adminNav?.classList.add('hidden');
@@ -261,11 +252,11 @@
             if (perfil === 'Solicitante') {
                 if(solText) solText.textContent = "Solicitação de Suprimentos";
                 if(servText) servText.textContent = "Solicitação de Serviços";
-                if(servicosTitle) servicosTitle.textContent = "Meus Serviços Solicitados";
+                document.getElementById('servicos-title').textContent = "Meus Serviços Solicitados";
             } else {
                 if(solText) solText.textContent = "Gestão de Suprimentos";
                 if(servText) servText.textContent = "Gestão de Serviços";
-                if(servicosTitle) servicosTitle.textContent = "Gestão de Serviços";
+                document.getElementById('servicos-title').textContent = "Gestão de Serviços";
             }
 
             if (perfil === 'Admin') {
@@ -1062,13 +1053,8 @@
                          if (STATUS_MAP[p.status].text.length > STATUS_MAP[g.status].text.length) {
                              g.status = p.status;
                          }
-                        // CORREÇÃO: O agrupamento herda o status de NF se qualquer item tiver NF, e salva a primeira URL encontrada.
-                        if(!!p.urlNotaFiscal) {
-                             g.hasNF = true;
-                             if (!g.nfUrl) { 
-                                 g.nfUrl = p.urlNotaFiscal;
-                             }
-                        }
+                        // O agrupamento herda o status de NF se qualquer item tiver NF
+                        if(!!p.urlNotaFiscal) g.hasNF = true;
                     }
                 } else {
                     grouped.push({ 
@@ -1308,11 +1294,7 @@
                         <td class="px-4 py-3 text-sm text-gray-600">${f.segmento || '-'}</td>
                         <td class="px-4 py-3 text-sm text-gray-600">${f.telefone || '-'}</td>
                         <td class="px-4 py-3 text-sm text-gray-600 truncate max-w-xs" title="${f.endereco}">${f.endereco || '-'}</td>
-                        <td class="px-4 py-3 text-right flex justify-end gap-3">
-                            <!-- NOVO: Botão de Edição de Fornecedor -->
-                            <button onclick="openFornecedorModal('${f.id}')" class="text-primary-600 hover:text-primary-800 text-sm font-medium">
-                                <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
-                            </button>
+                        <td class="px-4 py-3 text-right">
                             <button onclick="deleteFornecedor('${f.id}')" class="text-red-500 hover:text-red-700">
                                 <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
                             </button>
@@ -1321,33 +1303,6 @@
                 `;
             });
         }
-
-        window.openFornecedorModal = (id = null) => {
-            const f = document.getElementById('form-fornecedor');
-            f.reset();
-            f.dataset.id = id || "";
-
-            if (id) {
-                const forn = state.fornecedores.find(x => x.id === id);
-                if (forn) {
-                    f.nome.value = forn.nome || '';
-                    f.cnpj.value = forn.cnpj || '';
-                    f.segmento.value = forn.segmento || '';
-                    f.email.value = forn.email || '';
-                    f.telefone.value = forn.telefone || '';
-                    f.endereco.value = forn.endereco || '';
-                    document.getElementById('modal-fornecedor-title').textContent = "Editar Fornecedor";
-                }
-            } else {
-                 document.getElementById('modal-fornecedor-title').textContent = "Novo Fornecedor";
-            }
-            document.getElementById('modal-fornecedor').classList.remove('hidden');
-        };
-
-        window.closeFornecedorModal = () => {
-    document.getElementById('modal-fornecedor').classList.add('hidden');
-};
-
 
         window.deleteFornecedor = (id) => {
             showConfirmationModal("Tem certeza que deseja excluir este fornecedor?", async () => {
@@ -2214,8 +2169,12 @@
              document.getElementById('search-fornecedor-segmento')?.addEventListener('input', renderFornecedoresPage);
              
              // NOVO: Fornecedor Save (Abre Modal)
-             document.getElementById('btn-novo-fornecedor')?.addEventListener('click', () => openFornecedorModal(null));
-             
+             document.getElementById('btn-novo-fornecedor')?.addEventListener('click', () => {
+                 document.getElementById('modal-fornecedor').classList.remove('hidden');
+             });
+             // Helper global para fechar modal de fornecedor
+             window.closeFornecedorModal = () => document.getElementById('modal-fornecedor').classList.add('hidden');
+
              // Save Pedido
              document.getElementById('form-pedido').addEventListener('submit', async e => {
                  e.preventDefault();
@@ -2379,124 +2338,126 @@
              document.getElementById('form-fornecedor').addEventListener('submit', async e => {
                  e.preventDefault();
                  const f = e.target;
-                 const docId = f.dataset.id;
                  
+                 // CORREÇÃO DE BUG: Garante que os campos são lidos e salvos corretamente
                  try {
-                      const data = {
+                      await addDoc(collection(db, `artifacts/${appId}/public/data/fornecedores`), {
                           nome: f.nome.value, 
                           cnpj: f.cnpj.value, 
                           segmento: f.segmento.value, 
                           email: f.email.value, 
                           telefone: f.telefone.value, 
                           endereco: f.endereco.value
-                      };
-
-                      if (docId) {
-                           await updateDoc(doc(db, `artifacts/${appId}/public/data/fornecedores`, docId), data);
-                           showNotification("Fornecedor atualizado!", "success");
-                      } else {
-                           await addDoc(collection(db, `artifacts/${appId}/public/data/fornecedores`), data);
-                           showNotification("Fornecedor cadastrado!", "success");
-                      }
+                      });
+                      showNotification("Fornecedor cadastrado!", "success");
                       f.reset(); document.getElementById('modal-fornecedor').classList.add('hidden');
                  } catch(err){ 
-                      console.error("ERRO AO CADASTRAR/EDITAR FORNECEDOR:", err);
+                      console.error("ERRO AO CADASTRAR FORNECEDOR:", err);
                       // Tentativa de mostrar a mensagem de erro do Firebase na notificação
                       showNotification("Erro ao cadastrar fornecedor: " + (err.message || 'Verifique o console.'), "error"); 
                  }
              });
 
 
-             // Save NF Form (CORRIGIDO FLUXO DE RECARGA/LOGOUT)
-             document.getElementById('form-nf-upload').addEventListener('submit', async e => {
-                 e.preventDefault(); // CRÍTICO: Evita a recarga da página/crash
-                 const f = e.target;
-                 const idOrRN = f.dataset.target;
-                 const isGroup = f.dataset.isgroup === 'true';
-
-                 const btn = f.querySelector('button[type="submit"]');
-                 btn.disabled = true; btn.textContent = "...";
-
-                 const dataEmissaoNF = f.dataEmissao.value;
-                 const dataDoDia = f.dataDoDia.value;
-                 const modalidadeNF = f.modalidadeNF.value;
-
-                 if (!dataEmissaoNF || !dataDoDia) {
-                    showNotification("Data Emissão NF e Data do Dia são obrigatórias.", "error");
-                    btn.disabled = false; btn.textContent = "Salvar Dados e Recebimento";
-                    return;
-                 }
-
-                 // 1. Validação de Compliance (Datas)
-                 const compliance = checkCompetenceAndNP707(dataEmissaoNF, dataDoDia, modalidadeNF);
-                 let newStatus = 'entregue'; // Status padrão após o recebimento/lançamento de NF
-
-                 if (compliance.statusCompetencia === COMPLIANCE_STATUS.COMPETENCIA_FORA.text ||
-                     compliance.statusNP707 === COMPLIANCE_STATUS.NP707_FORA.text) {
-                      newStatus = 'pendencia'; // Define status como Pendência se houver inconsistência
-                      showNotification(`Atenção: Inconsistência de Compliance detectada! Status: ${compliance.statusCompetencia} / ${compliance.statusNP707}`, "error");
-                 } else {
-                     showNotification("Conformidade de datas OK. Status: Entregue/Lançamento.", "success");
-                 }
-
-
-                 // 2. Upload da NF
-                 let uploadedNFUrl = f.dataset.currentnfurl || '';
-                 const file = document.getElementById('file-nf-upload').files[0];
-
-                 if (file) {
-                     try {
-                         const r = ref(storage, `artifacts/${appId}/nf_docs/${Date.now()}_${file.name}`);
-                         await uploadBytes(r, file);
-                         uploadedNFUrl = await getDownloadURL(r);
-                     } catch (uploadError) {
-                         console.error("Erro no upload da NF:", uploadError);
-                         showNotification("Erro ao fazer upload do arquivo de NF.", "error");
-                         btn.disabled = false; btn.textContent = "Salvar Dados e Recebimento";
-                         return;
-                     }
-                 } else if (!uploadedNFUrl) {
-                      showNotification("É necessário anexar o arquivo da Nota Fiscal.", "error");
-                      btn.disabled = false; btn.textContent = "Salvar Dados e Recebimento";
-                      return;
-                 }
-
-
-                 // 3. Montar dados para o Firestore
-                 const updateData = {
-                     fin: f.fin.value || deleteField(),
-                     modalidadeNF: f.modalidadeNF.value || deleteField(),
-                     dataEmissao: dataEmissaoNF || deleteField(),
-                     dataVcto: f.dataVcto.value || deleteField(),
-                     urlNotaFiscal: uploadedNFUrl,
-                     status: newStatus, // Atualiza o status com base na conformidade
-                     statusCompetencia: compliance.statusCompetencia, // Novo campo
-                     statusNP707: compliance.statusNP707 // Novo campo
-                 };
-
-                 // 4. Aplicar em Lote (se for grupo) ou Individual
-                 try {
-                     if (isGroup) {
-                         const batch = writeBatch(db);
-                         const pedidosNoGrupo = state.pedidos.filter(p => p.numRN === idOrRN);
-                         
-                         pedidosNoGrupo.forEach(p => {
-                            batch.update(doc(db, `artifacts/${appId}/public/data/pedidos`, p.id), updateData);
-                         });
-                         await batch.commit();
-                     } else {
-                         await updateDoc(doc(db, `artifacts/${appId}/public/data/pedidos`, idOrRN), updateData);
-                     }
-                     showNotification(`NF salva! Status: ${newStatus}`, "success");
-                     window.closeNFModal();
-                 } catch (saveError) {
-                      console.error("Erro ao salvar dados da NF no Firestore:", saveError);
-                      showNotification("Erro ao salvar no sistema: " + (saveError.message || 'Verifique o console.'), "error");
-                 } finally {
-                      btn.disabled = false; btn.textContent = "Salvar Dados e Recebimento";
-                 }
+             // Calc Total
+             // Adicionado check de existência para evitar o erro de null
+             const qtdInput = document.getElementById('inp-qtd');
+             const valInput = document.getElementById('inp-val');
+             const totInput = document.getElementById('inp-tot');
+             
+             const calc = () => {
+                 const q = parseFloat(qtdInput?.value)||0;
+                 const v = parseFloat(valInput?.value)||0;
+                 if (totInput) totInput.value = (q*v).toFixed(2);
+             };
+             
+             if (qtdInput && valInput && totInput) {
+                qtdInput.addEventListener('input', calc);
+                valInput.addEventListener('input', calc);
+             }
+             
+             // Search Product
+             document.getElementById('inp-search')?.addEventListener('keyup', e => {
+                 clearTimeout(searchDebounceTimer);
+                 if(e.target.value.length < 3) { document.getElementById('pedido-results').innerHTML=''; return; }
+                 searchDebounceTimer = setTimeout(async () => {
+                      const q = query(collection(db, `artifacts/${appId}/public/data/produtos`), where('searchKey', '>=', e.target.value.toLowerCase()), where('searchKey', '<=', e.target.value.toLowerCase()+'\uf8ff'), limit(5));
+                      const snap = await getDocs(q);
+                      const div = document.getElementById('pedido-results'); div.innerHTML = '';
+                      snap.forEach(d => { const p=d.data(); div.innerHTML += `<div class="p-2 hover:bg-gray-100 cursor-pointer text-xs border-b" onclick="selectProduct('${p.produtoNome}','${p.variacao}','${p.grupoCompras}','${p.produtoCod}')">${p.produtoNome} - ${p.variacao}</div>`; });
+                 }, 300);
              });
 
+             // Admin: Save User (UPDATED)
+             document.getElementById('form-admin-user').addEventListener('submit', async e => {
+                 e.preventDefault();
+                 if(currentUserProfile.perfil!=='Admin') return;
+                 const f = e.target;
+                 const uid = f.uid.value; // Can be empty for new users
+                 
+                 // If creating a new user (UID is empty/auto-generated placeholder)
+                 if(!uid) {
+                     const pwd = f.password.value;
+                     if(!pwd) return showNotification("Senha obrigatória para novos usuários", "error");
+                     if(pwd.length < 6) return showNotification("A senha deve ter pelo menos 6 caracteres", "error");
+                     
+                     let secondaryApp;
+                     try {
+                          // Initialize secondary app with unique name to avoid conflict
+                          secondaryApp = initializeApp(firebaseConfig, `Secondary_${Date.now()}`);
+                          const secondaryAuth = getAuth(secondaryApp);
+                          
+                          // Create user
+                          await createUserWithEmailAndPassword(secondaryAuth, f.email.value, pwd);
+                          const newUid = userCred.user.uid;
+                          
+                          // Save to Firestore
+                          await setDoc(doc(db, `artifacts/${appId}/public/data/user_profiles`, newUid), {
+                               nome: f.nome.value, email: f.email.value, perfil: f.perfil.value, unidade: f.unidade.value
+                          });
+                          
+                          showNotification("Novo usuário criado com sucesso!", "success");
+                          f.reset();
+                          f.uid.placeholder = "(Gerado automaticamente)";
+                     } catch(err) {
+                          console.error(err);
+                          showNotification("Erro ao criar usuário: " + err.message, "error");
+                     } finally {
+                          // Ensure secondary app is deleted even if creation fails
+                          if(secondaryApp) await deleteApp(secondaryApp);
+                     }
+                 } else {
+                     // Existing user (Editing)
+                     try {
+                          await setDoc(doc(db, `artifacts/${appId}/public/data/user_profiles`, uid), {
+                               nome: f.nome.value, email: f.email.value, perfil: f.perfil.value, unidade: f.unidade.value
+                          }, {merge: true});
+                          showNotification("Usuário salvo.", "success");
+                     } catch(err){ showNotification("Erro ao salvar usuário.", "error"); }
+                 }
+             });
+             
+             // Admin: Save Link
+             document.getElementById('form-admin-link').addEventListener('submit', async e => {
+                 e.preventDefault();
+                 // Get selected roles
+                 const allowedProfiles = [];
+                 document.querySelectorAll('input[name="linkAccess"]:checked').forEach(cb => {
+                      allowedProfiles.push(cb.value);
+                 });
+                 
+                 try {
+                      await addDoc(collection(db, `artifacts/${appId}/public/data/links_externos`), {
+                          nome: e.target.nome.value, 
+                          url: e.target.url.value,
+                          allowedProfiles: allowedProfiles
+                      });
+                      showNotification("Link criado.", "success"); 
+                      e.target.reset();
+                      // Reset checkboxes
+                      document.querySelectorAll('input[name="linkAccess"]').forEach(cb => cb.checked = false);
+                 } catch(err){ showNotification("Erro ao criar link.", "error"); }
+             });
 
              // Bulk Group
              document.getElementById('btn-bulk-rn').addEventListener('click', () => document.getElementById('modal-agrupar').classList.remove('hidden'));
@@ -2640,7 +2601,7 @@
                 <div id="nav-admin" class="hidden pt-4">
                     <div class="text-xs font-semibold text-primary-400 uppercase tracking-wider mb-2 px-3">Administração</div>
                     <button data-page="admin" class="nav-item w-full group flex items-center px-3 py-2.5 text-sm font-medium rounded-md transition-colors text-primary-100 hover:bg-primary-800 hover:text-white">
-                        <svg class="mr-3 h-5 w-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                        <svg class="mr-3 h-5 w-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
                         Configurações
                     </button>
                 </div>
@@ -3255,7 +3216,7 @@
             <div class="fixed inset-0 bg-gray-900/75 backdrop-blur-sm"></div>
             <div class="fixed inset-0 z-10 flex items-center justify-center p-4">
                 <div class="bg-white rounded-lg shadow-xl w-full max-w-md p-6">
-                    <h3 class="text-lg font-bold mb-4" id="modal-fornecedor-title">Novo Fornecedor</h3>
+                    <h3 class="text-lg font-bold mb-4">Novo Fornecedor</h3>
                     <form id="form-fornecedor" class="space-y-4">
                         <div>
                             <label class="block text-sm font-medium text-gray-700">Nome / Razão Social</label>
@@ -3548,7 +3509,6 @@
                                     <option value="registrado">Registrado</option>
                                     <option value="aguardando-entrega">Aguardando Entrega</option>
                                     <option value="entregue">Entregue</option>
-                                    <option value="pendencia">Pendência</option>
                                     <option value="finalizado">Finalizado</option>
                                 </select>
                             </div>
