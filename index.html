@@ -1344,6 +1344,86 @@ window.deleteFornecedor = (id) => {
             document.getElementById('modal-fornecedor').classList.remove('hidden');
         };
 
+        // NOVO: Listener para Upload de NF e Dados Financeiros
+            document.getElementById('form-nf-upload').addEventListener('submit', async e => {
+                e.preventDefault(); // <--- ISSO IMPEDE O RESET DA PÁGINA
+                
+                const f = e.target;
+                const btn = f.querySelector('button[type="submit"]');
+                const idOrRN = f.dataset.target;
+                const isGroup = f.dataset.isgroup === 'true';
+                const file = document.getElementById('file-nf-upload').files[0];
+
+                btn.disabled = true; 
+                btn.textContent = "Processando...";
+
+                try {
+                    let updateData = {};
+                    
+                    // 1. Se houver arquivo, faz upload
+                    if (file) {
+                        const r = ref(storage, `artifacts/${appId}/nfs/${Date.now()}_${file.name}`);
+                        await uploadBytes(r, file);
+                        const url = await getDownloadURL(r);
+                        
+                        updateData.urlNotaFiscal = url;
+                        // Se anexou NF, assume que foi entregue (se ainda não estiver finalizado)
+                        updateData.status = 'entregue'; 
+                    }
+
+                    // 2. Coleta dados financeiros (se visíveis/preenchidos)
+                    if (f.fin.value) updateData.fin = f.fin.value;
+                    if (f.dataEmissao.value) updateData.dataEmissao = f.dataEmissao.value;
+                    if (f.dataVcto.value) updateData.dataVcto = f.dataVcto.value;
+                    // updateData.modalidade não salvamos no pedido geralmente, é propriedade do item, 
+                    // mas se quiser salvar a correção:
+                    // updateData.modalidade = f.modalidadeNF.value; 
+
+                    // 3. Verifica se tem algo para atualizar
+                    if (Object.keys(updateData).length === 0) {
+                        showNotification("Nenhuma alteração detectada (sem arquivo ou dados).", "error");
+                        return;
+                    }
+
+                    // 4. Aplica a atualização (Individual ou em Lote/Grupo)
+                    if (isGroup) {
+                        // Busca todos os itens da RN e atualiza
+                        const q = query(collection(db, `artifacts/${appId}/public/data/pedidos`), where("numRN", "==", idOrRN));
+                        const snapshot = await getDocs(q);
+                        const batch = writeBatch(db);
+                        
+                        snapshot.forEach(docSnap => {
+                            // Não sobrescreve status se já estiver 'finalizado', a menos que seja forçado
+                            const currentStatus = docSnap.data().status;
+                            let dataToUpdate = { ...updateData };
+                            
+                            // Preserva status se já finalizado, a menos que seja admin querendo editar dados financeiros
+                            if (currentStatus === 'finalizado' && updateData.status === 'entregue') {
+                                delete dataToUpdate.status;
+                            }
+                            
+                            batch.update(docSnap.ref, dataToUpdate);
+                        });
+                        await batch.commit();
+                        showNotification("NF/Dados aplicados ao Agrupamento!", "success");
+
+                    } else {
+                        // Item Individual
+                        await updateDoc(doc(db, `artifacts/${appId}/public/data/pedidos`, idOrRN), updateData);
+                        showNotification("NF/Dados atualizados com sucesso!", "success");
+                    }
+
+                    window.closeNFModal();
+
+                } catch (err) {
+                    console.error(err);
+                    showNotification("Erro ao salvar NF: " + err.message, "error");
+                } finally {
+                    btn.disabled = false;
+                    btn.textContent = "Salvar Dados e Recebimento";
+                }
+            });
+
 
         // --- MODAL GRUPO & ADMIN ---
         // Função utilitária para recalcular total do item (usada no onchange)
