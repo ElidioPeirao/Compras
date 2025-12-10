@@ -126,7 +126,7 @@
         const STATUS_MAP = {
             // NOVO STATUS: ENVIADO PARA AQUISIÇÃO
             "enviado-aquisicao": { text: "Enviado p/ Aquisição", class: "bg-blue-200 text-blue-900 ring-blue-700/20 font-bold", iconColor: "text-blue-700", bgIcon: "bg-blue-300" },
-
+            "pendencia": { text: "Com Pendência", class: "bg-rose-100 text-rose-800 ring-rose-600/20 font-bold", iconColor: "text-rose-600", bgIcon: "bg-rose-100" }, 
             "a-inserir-rn": { text: "A Inserir RN", class: "bg-yellow-100 text-yellow-900 ring-yellow-700/20 font-bold", iconColor: "text-yellow-700", bgIcon: "bg-yellow-200" },
 
             "a-abrir-rn": { text: "A Abrir RN", class: "bg-blue-50 text-blue-700 ring-blue-600/20", iconColor: "text-blue-600", bgIcon: "bg-blue-100" },
@@ -3635,6 +3635,7 @@ document.getElementById('form-fornecedor').addEventListener('submit', async e =>
                                 <select id="group-status-select" class="block w-full rounded-md border-yellow-300 shadow-sm focus:border-yellow-500 focus:ring-yellow-500 sm:text-sm p-2 bg-white">
                                     <option value="enviado-aquisicao">Enviado p/ Aquisição</option>
                                     <option value="a-abrir-rn">A Abrir RN</option>
+                                    <option value="pendencia">Com Pendência</option>
                                     <option value="em-cotacao">Em Cotação</option>
                                     <option value="registrado">Registrado</option>
                                     <option value="aguardando-entrega">Aguardando Entrega</option>
