@@ -1608,24 +1608,60 @@ window.deleteFornecedor = (id) => {
 
         // NOVA FUNÇÃO: REMOVER ITEM DA RN
         // NOVA FUNÇÃO: REMOVER ITEM DA RN (CORRIGIDA)
+        // NOVA FUNÇÃO: REMOVER ITEM DA RN (COM DISSOLUÇÃO AUTOMÁTICA DE GRUPO PEQUENO)
         window.removeItemFromGroup = async (id) => {
-            showConfirmationModal("Tem certeza que deseja desvincular este pedido? Ele voltará para o status 'Enviado p/ Aquisição' e ficará disponível para novos grupos.", async () => {
+            showConfirmationModal("Tem certeza que deseja desvincular este pedido?", async () => {
                 try {
-                    await updateDoc(doc(db, `artifacts/${appId}/public/data/pedidos`, id), {
-                        // Remove vínculos de RN e OC
+                    // 1. Busca o item para descobrir qual é a RN dele
+                    const docRef = doc(db, `artifacts/${appId}/public/data/pedidos`, id);
+                    const docSnap = await getDoc(docRef);
+                    
+                    if (!docSnap.exists()) return;
+                    
+                    const currentRN = docSnap.data().numRN;
+                    const batch = writeBatch(db); // Prepara um lote de operações
+
+                    // 2. Define a atualização para o item que clicamos (Remove vínculo)
+                    batch.update(docRef, {
                         numRN: deleteField(),
                         dataAberturaRN: deleteField(),
                         numOC: deleteField(),
-                        
-                        // Remove anexos que vieram do agrupamento anterior (importante!)
                         urlBulkAnexos: deleteField(),
-                        
-                        // Reseta para o status inicial, garantindo que apareça na lista para agrupar de novo
-                        status: 'enviado-aquisicao' 
+                        status: 'enviado-aquisicao'
                     });
+
+                    let mensagem = "Pedido desvinculado com sucesso.";
+
+                    // 3. Verifica quantos itens existem nessa RN
+                    if (currentRN) {
+                        const q = query(collection(db, `artifacts/${appId}/public/data/pedidos`), where("numRN", "==", currentRN));
+                        const snapshot = await getDocs(q);
+
+                        // LÓGICA MÁGICA: Se o grupo tem 2 itens ou menos (contando com este que vamos tirar),
+                        // significa que sobraria 1 ou 0. Então, dissolvemos o grupo inteiro.
+                        if (snapshot.size <= 2) {
+                            snapshot.forEach(otherDoc => {
+                                // Atualiza os OUTROS itens que sobrariam (não o atual, pois já fizemos acima)
+                                if (otherDoc.id !== id) {
+                                    batch.update(otherDoc.ref, {
+                                        numRN: deleteField(),
+                                        dataAberturaRN: deleteField(),
+                                        numOC: deleteField(),
+                                        urlBulkAnexos: deleteField(),
+                                        status: 'enviado-aquisicao'
+                                    });
+                                }
+                            });
+                            mensagem = "Grupo dissolvido, pois restaria apenas um item.";
+                        }
+                    }
+
+                    // 4. Executa todas as alterações de uma vez
+                    await batch.commit();
                     
-                    showNotification("Pedido desvinculado e retornado para a fila inicial.", "success");
-                    window.closeGroupModal(); // Fecha o modal para atualizar a lista
+                    showNotification(mensagem, "success");
+                    window.closeGroupModal(); 
+
                 } catch(e) { 
                     console.error(e);
                     showNotification("Erro ao desvincular: " + e.message, "error"); 
