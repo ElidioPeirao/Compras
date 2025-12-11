@@ -62,22 +62,13 @@
     
     <!-- Firebase -->
     <script type="module">
+        import { app, auth, db, storage, appId } from "./firebase-config.js";
         import { initializeApp, deleteApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, addDoc, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, onSnapshot, query, where, Timestamp, orderBy, limit, writeBatch, deleteField, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         import { getStorage, ref, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 
-        const firebaseConfig = {
-            apiKey: "AIzaSyAHAO1ZJrc5JYgut4tjcJX-vbKlEaFn6cQ",
-            authDomain: "comprassenai-40755.firebaseapp.com",
-            projectId: "comprassenai-40755",
-            storageBucket: "comprassenai-40755.firebasestorage.app",
-            messagingSenderId: "592503297730",
-            appId: "1:592503297730:web:cb40e3711d1f9647908d5b",
-            measurementId: "G-74W14C81WX"
-        };
         
-        let app, auth, db, storage, appId;
         let currentUser = null;
         let currentUserProfile = {}; 
         let unsubscribePedidos = null; 
@@ -87,18 +78,7 @@
         let searchDebounceTimer = null;
         let lastGroupIdForReturn = null; // Armazena o ID/RN do grupo para retorno
 
-        try {
-            app = initializeApp(firebaseConfig);
-            auth = getAuth(app);
-            db = getFirestore(app);
-            setLogLevel('debug'); // HABILITADO LOGGING DO FIRESTORE PARA DEBUG
-            storage = getStorage(app);
-            appId = firebaseConfig.appId;
-        } catch (e) {
-            console.error(e);
-            // Substitui alert() por showNotification()
-            showNotification("Erro crítico ao conectar no Firebase.", "error");
-        }
+
         
         const state = {
             pedidos: [], 
