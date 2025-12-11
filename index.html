@@ -587,7 +587,10 @@
 
                     const st = STATUS_MAP[displayStatusKey] || { text: item.status, class: "bg-gray-100 text-gray-600" };
                     const dSol = item.dataSolicitacao?.toDate ? item.dataSolicitacao.toDate() : new Date();
-                    const check = (isMain && isGestor) ? `<input type="checkbox" class="row-checkbox h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-600" value="${item.id}">` : '';
+                    // Verifica se o ID já está na lista de selecionados
+const isChecked = state.selectedPedidos.includes(item.id) ? 'checked' : '';
+
+const check = (isMain && isGestor) ? `<input type="checkbox" class="row-checkbox h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-600" value="${item.id}" ${isChecked}>` : '';
 
                     tr.innerHTML = `
                         <td class="px-3 py-4 w-10 text-center">${check}</td>
@@ -631,6 +634,18 @@
                 });
             }
         }
+
+// Função para limpar seleção visual e interna
+        window.clearSelection = () => {
+            // 1. Limpa a lista na memória
+            state.selectedPedidos = [];
+            
+            // 2. Desmarca visualmente todas as caixas na tela atual
+            document.querySelectorAll('.row-checkbox').forEach(cb => cb.checked = false);
+            
+            // 3. Esconde a barra azul
+            updateBulkActionBar();
+        };
 
         // --- NOVA TABELA DE SERVIÇOS ---
         function renderServicosPage() {
@@ -1899,6 +1914,7 @@ window.deleteFornecedor = (id) => {
                  if(document.getElementById('dashboard').classList.contains('hidden') === false) renderDashboard();
              });
         }
+
         async function fetchLinksExternos() {
              if(unsubscribeLinks) unsubscribeLinks();
              unsubscribeLinks = onSnapshot(collection(db, `artifacts/${appId}/public/data/links_externos`), s => {
@@ -2689,18 +2705,19 @@ document.getElementById('form-fornecedor').addEventListener('submit', async e =>
                  await batch.commit();
                  showNotification(`Grupo criado e ${state.selectedPedidos.length} pedidos agrupados na RN ${newRN}!`, "success");
                  document.getElementById('modal-agrupar').classList.add('hidden');
-                 state.selectedPedidos = []; updateBulkActionBar();
+                 window.clearSelection(); // Limpa tudo corretamente
              });
              
              // NEW: Bulk Ficha Cotação from selected items
              document.getElementById('btn-bulk-ficha').addEventListener('click', () => {
-                 if (state.selectedPedidos.length > 0) {
-                     // Passa a lista de IDs separados por vírgula. isGroup=false para ser tratado como lote de IDs
-                     window.openCotacaoModal(state.selectedPedidos.join(','), false); 
-                 } else {
-                    showNotification("Selecione pedidos para gerar a ficha.", "error");
-                 }
-             });
+    if (state.selectedPedidos.length > 0) {
+        window.openCotacaoModal(state.selectedPedidos.join(','), false);
+        // Opcional: Limpar a seleção após abrir o modal
+        // window.clearSelection(); 
+    } else {
+        showNotification("Selecione pedidos para gerar a ficha.", "error");
+    }
+});
         
     </script>
 </head>
