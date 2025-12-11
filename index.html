@@ -1003,6 +1003,8 @@
             // Ler o filtro atual
             const filterType = document.getElementById('filter-nf-status') ? document.getElementById('filter-nf-status').value : 'pendente';
 
+            
+
             // Pedidos que estão no fluxo de gestão (já passaram da fase de solicitação inicial)
             const STATUSES_TO_TRACK = ['registrado', 'aguardando-entrega', 'entregue', 'aguardando-lancamento', 'finalizado', 'em-atraso'];
             const pedidosAtivos = state.pedidos.filter(p => STATUSES_TO_TRACK.includes(p.status));
@@ -1605,18 +1607,29 @@ window.deleteFornecedor = (id) => {
         window.closeGroupModal = () => document.getElementById('modal-group').classList.add('hidden');
 
         // NOVA FUNÇÃO: REMOVER ITEM DA RN
+        // NOVA FUNÇÃO: REMOVER ITEM DA RN (CORRIGIDA)
         window.removeItemFromGroup = async (id) => {
-            showConfirmationModal("Tem certeza que deseja desvincular este pedido da RN? Ele voltará para o status 'A Abrir RN'.", async () => {
+            showConfirmationModal("Tem certeza que deseja desvincular este pedido? Ele voltará para o status 'Enviado p/ Aquisição' e ficará disponível para novos grupos.", async () => {
                 try {
                     await updateDoc(doc(db, `artifacts/${appId}/public/data/pedidos`, id), {
+                        // Remove vínculos de RN e OC
                         numRN: deleteField(),
                         dataAberturaRN: deleteField(),
-                        numOC: deleteField(), // Remove OC também
-                        status: 'a-abrir-rn' // Volta para o status inicial
+                        numOC: deleteField(),
+                        
+                        // Remove anexos que vieram do agrupamento anterior (importante!)
+                        urlBulkAnexos: deleteField(),
+                        
+                        // Reseta para o status inicial, garantindo que apareça na lista para agrupar de novo
+                        status: 'enviado-aquisicao' 
                     });
-                    showNotification("Pedido desvinculado.", "success");
-                    window.closeGroupModal(); // Fecha para forçar refresh
-                } catch(e) { showNotification("Erro ao desvincular.", "error"); }
+                    
+                    showNotification("Pedido desvinculado e retornado para a fila inicial.", "success");
+                    window.closeGroupModal(); // Fecha o modal para atualizar a lista
+                } catch(e) { 
+                    console.error(e);
+                    showNotification("Erro ao desvincular: " + e.message, "error"); 
+                }
             });
         };
         
