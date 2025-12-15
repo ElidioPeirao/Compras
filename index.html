@@ -83,6 +83,7 @@
         const state = {
             pedidos: [], 
             fornecedores: [], 
+            funcionarios: [],
             unidadesList: [], // Lista completa de objetos de unidade
             unidades: [], // Apenas os nomes para compatibilidade (será preenchido dinamicamente)
             gruposDeCompra: [
@@ -99,7 +100,7 @@
             produtosBuscados: [], 
             linksExternos: [], 
             selectedPedidos: [], 
-            filtros: { unidade: "", modalidade: "", status: "", search: "" }, // NOVO: Adicionado campo de busca
+            filtros: { unidade: "", modalidade: "", status: "", search: "", fornecedor: "" }, // NOVO: Adicionado campo de busca
             isSidebarOpen: true // NOVO: Estado da barra lateral
         };
 
@@ -195,6 +196,7 @@
                 fetchLinksExternos();
                 fetchFornecedores(); 
                 fetchUnidades(); 
+                fetchFuncionarios();
 
                 if (currentUserProfile.perfil === 'Admin') fetchUsuarios();
                 
@@ -303,6 +305,20 @@
                 if (toggleIcon) toggleIcon.innerHTML = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />`; // Ícone de abrir (direita)
             }
         }
+        
+
+window.deleteServico = (id) => {
+    showConfirmationModal("Tem certeza que deseja excluir esta solicitação de serviço? Esta ação não pode ser desfeita.", async () => {
+        try {
+            await deleteDoc(doc(db, `artifacts/${appId}/public/data/pedidos`, id));
+            showNotification("Serviço excluído.", "success");
+        } catch(e) {
+            console.error(e);
+            showNotification("Erro ao excluir serviço.", "error");
+        }
+    });
+};
+
 
         // --- NAVIGATION ---
         function showPage(pageId) {
@@ -397,223 +413,289 @@
             return previsao < hoje;
         }
 
-        function renderPedidosTable(pedidos, tableId = 'tabela-pedidos-solicitacoes') {
-            const tbody = document.getElementById(tableId)?.querySelector('tbody');
-            if (!tbody) return;
-            tbody.innerHTML = '';
+        // --- VALIDAÇÃO DE LIMITE DE FORNECEDOR (NOVO) ---
+function checkGroupSupplierLimit() {
+    const supplierInput = document.getElementById('group-fornecedor-edit');
+    const warningDiv = document.getElementById('group-supplier-warning');
+    
+    if (!supplierInput || !warningDiv) return;
 
-            const perfil = currentUserProfile.perfil || "Solicitante";
-            const isGestor = perfil === 'Aquisicoes' || perfil === 'Admin';
-            const isMain = tableId === 'tabela-pedidos-solicitacoes';
-            const searchFilter = document.getElementById('filter-search')?.value.toLowerCase() || ''; // NOVO FILTRO
+    const supplierName = supplierInput.value.trim();
+    
+    // Se não tiver fornecedor selecionado, limpa o aviso
+    if (!supplierName) {
+        warningDiv.innerHTML = '';
+        warningDiv.className = 'text-xs mt-1 h-4';
+        return;
+    }
 
-            let list = pedidos.filter(p => {
-                // SEPARAÇÃO: A tabela de suprimentos mostra tudo MENOS Serviço
-                if (isMain && p.modalidade === 'Serviço') return false;
+    const LIMITE_ANUAL = 92000;
+    const currentYear = new Date().getFullYear();
+    let gastoHistorico = 0;
 
-                if (perfil === 'Solicitante' && p.solicitanteId !== currentUser.uid && p.nomeDemandante !== currentUserProfile.nome) return false;
-                if (state.filtros.unidade && p.unidade !== state.filtros.unidade) return false;
-                // Excluir Modalidade 'Serviço' do filtro Modalidade na página de Suprimentos
-                if (state.filtros.modalidade && p.modalidade !== state.filtros.modalidade) return false;
-                
-                let pStatus = p.status;
-                // Lógica para marcar pedidos sem RN (agrupamento pendente)
-                if (isGestor && pStatus === 'a-abrir-rn' && !p.numRN && !p.dataAberturaRN) {
-                     // Adicional: Se o pedido foi marcado com status 'a-inserir-rn' pela ação de 'Agrupar'
-                     if (p.status === 'a-inserir-rn') {
-                        pStatus = 'a-inserir-rn';
-                     } else {
-                        // Se não tem RN/Data mas o status é 'a-abrir-rn'
-                        pStatus = 'a-inserir-rn';
-                     }
-                }
-                
-                if (state.filtros.status && pStatus !== state.filtros.status) return false;
+    // 1. Coleta os IDs dos itens que estão no modal atual (para não somar duplicado do histórico)
+    const currentItemIds = Array.from(document.querySelectorAll('.group-item-row')).map(row => row.dataset.id);
 
-                // NOVO: Filtro de busca por RN/OC
-                if (searchFilter) {
-                    const rn = (p.numRN || '').toLowerCase();
-                    const oc = (p.numOC || '').toLowerCase();
-                    if (!rn.includes(searchFilter) && !oc.includes(searchFilter)) {
-                        return false;
-                    }
-                }
+    // 2. Calcula o gasto histórico (excluindo os itens que estamos editando agora)
+    state.pedidos.forEach(p => {
+        // Filtra por fornecedor
+        if (!p.fornecedor || p.fornecedor.trim().toLowerCase() !== supplierName.toLowerCase()) return;
+        // Ignora cancelados
+        if (p.status === 'cancelado') return;
+        // Ignora os itens que já estão na tela (pois vamos somar o valor "novo" deles abaixo)
+        if (currentItemIds.includes(p.id)) return;
 
-                return true;
-            });
+        // Verifica o ano
+        let pDate = new Date();
+        if (p.dataSolicitacao) {
+            pDate = p.dataSolicitacao.toDate ? p.dataSolicitacao.toDate() : new Date(p.dataSolicitacao);
+        }
 
-            if (list.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="10" class="py-10 text-center text-gray-500 text-sm">Nenhum pedido encontrado.</td></tr>`;
-                return;
-            }
+        if (pDate.getFullYear() === currentYear) {
+            gastoHistorico += parseFloat(p.valorTotal || 0);
+        }
+    });
 
-            const grouped = [];
-            const rnMap = new Map();
+    // 3. Calcula o valor atual do modal (soma dos inputs da tela)
+    let gastoAtualModal = 0;
+    document.querySelectorAll('.group-item-row').forEach(row => {
+        gastoAtualModal += parseFloat(row.dataset.totalvalue || 0);
+    });
 
-            list.forEach(p => {
-                let effectiveStatus = p.status;
+    const totalAcumulado = gastoHistorico + gastoAtualModal;
+    const restante = LIMITE_ANUAL - totalAcumulado;
 
-                // 1. Determina o Status Visual (Inclui a lógica de 'a-inserir-rn')
-                if (isGestor && p.status === 'a-abrir-rn' && !p.numRN && !p.dataAberturaRN) {
-                     effectiveStatus = 'a-inserir-rn';
-                }
-                
-                // 2. Tenta agrupar por RN se houver (RNs existentes são grupos)
-                if (p.numRN && isMain) {
-                    if (!rnMap.has(p.numRN)) {
-                        rnMap.set(p.numRN, { isGroup: true, numRN: p.numRN, items: [p], total: parseFloat(p.valorTotal||0), status: effectiveStatus, dateRN: p.dataAberturaRN, isPendingRN: false, id: p.numRN, fornecedor: p.fornecedor, numOC: p.numOC, dataPrevisao: p.dataPrevisao });
-                        grouped.push(rnMap.get(p.numRN));
-                    } else {
-                        const g = rnMap.get(p.numRN);
-                        g.items.push(p);
-                        g.total += parseFloat(p.valorTotal||0);
-                        g.status = effectiveStatus;
-                        
-                        // Atualiza as propriedades do grupo com base no primeiro item (para exibição)
-                        if (!g.fornecedor && p.fornecedor) g.fornecedor = p.fornecedor;
-                        if (!g.numOC && p.numOC) g.numOC = p.numOC;
-                        if (!g.dataPrevisao && p.dataPrevisao) g.dataPrevisao = p.dataPrevisao;
+    // 4. Exibe o aviso
+    const formatMoney = (v) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
-                    }
-                } 
-                // 3. SE NÃO FOI AGRUPADO POR RN, TRATA COMO ITEM INDIVIDUAL (Inclui A-INSERIR-RN individualmente)
-                else {
-                    grouped.push({ isGroup: false, ...p, status: effectiveStatus });
-                }
-            });
+    if (totalAcumulado > LIMITE_ANUAL) {
+        warningDiv.className = 'text-xs mt-2 p-2 rounded bg-red-100 text-red-700 font-bold border border-red-200 block';
+        warningDiv.innerHTML = `⚠️ LIMITE EXCEDIDO! Acumulado: ${formatMoney(totalAcumulado)}. Excesso: ${formatMoney(totalAcumulado - LIMITE_ANUAL)}`;
+    } else if (restante < 5000) {
+        warningDiv.className = 'text-xs mt-2 p-2 rounded bg-orange-100 text-orange-700 font-bold border border-orange-200 block';
+        warningDiv.innerHTML = `⚠️ Atenção: Próximo ao limite. Restante: ${formatMoney(restante)}`;
+    } else {
+        warningDiv.className = 'text-xs mt-1 text-green-600 block';
+        warningDiv.innerHTML = `Dentro do limite. Acumulado: ${formatMoney(totalAcumulado)}. Restante: ${formatMoney(restante)}`;
+    }
+}
+        window.renderPedidosTable = function(pedidos, tableId = 'tabela-pedidos-solicitacoes') {
+    const tbody = document.getElementById(tableId)?.querySelector('tbody');
+    if (!tbody) return;
+    tbody.innerHTML = '';
 
-            
-            // Ordenar: RNs > Individuais/Pendentes
-            grouped.sort((a, b) => {
-                 // Prioriza RNs
-                if (a.isGroup && !b.isGroup) return -1;
-                if (!a.isGroup && b.isGroup) return 1;
+    const perfil = currentUserProfile.perfil || "Solicitante";
+    const isGestor = perfil === 'Aquisicoes' || perfil === 'Admin';
+    const isMain = tableId === 'tabela-pedidos-solicitacoes';
+    const searchFilter = document.getElementById('filter-search')?.value.toLowerCase() || '';
 
-                // Ordem cronológica reversa para itens individuais/dentro de grupos
-                const dateA = a.dataSolicitacao?.toDate ? a.dataSolicitacao.toDate() : new Date(0);
-                const dateB = b.dataSolicitacao?.toDate ? b.dataSolicitacao.toDate() : new Date(0);
-                return dateB.getTime() - dateA.getTime();
-            });
+    // --- 1. FILTRAGEM INICIAL ---
+    let list = pedidos.filter(p => {
+        // Se for a tabela principal, esconde serviços (eles têm tela própria)
+        if (isMain && p.modalidade === 'Serviço') return false;
 
+        // Filtro de permissão (Solicitante vê só os seus)
+        if (perfil === 'Solicitante' && p.solicitanteId !== currentUser.uid && p.nomeDemandante !== currentUserProfile.nome) return false;
+        
+        // Filtros da barra superior
+        if (state.filtros.unidade && p.unidade !== state.filtros.unidade) return false;
+        if (state.filtros.modalidade && p.modalidade !== state.filtros.modalidade) return false;
+        if (state.filtros.status && p.status !== state.filtros.status) return false;
+        
+        // Filtro de Fornecedor
+        if (state.filtros.fornecedor) {
+            const termo = state.filtros.fornecedor.toLowerCase();
+            const pFornecedor = (p.fornecedor || '').toLowerCase();
+            if (!pFornecedor.includes(termo)) return false;
+        }
 
-            grouped.forEach(item => {
-                const tr = document.createElement('tr');
-                tr.className = "hover:bg-gray-50 transition-colors border-b border-gray-100 last:border-0";
-                
-                if (item.isGroup) {
-                    let displayStatusKey = item.status;
-                    // Calcula Atraso para o primeiro item do grupo se for relevante
-                    if (item.items[0] && checkIsLate(item.items[0])) {
-                        displayStatusKey = 'em-atraso';
-                    }
-
-                    const st = STATUS_MAP[displayStatusKey] || { text: item.status, class: "bg-gray-100 text-gray-600" };
-                    
-                    let dateStr = '---';
-                    try {
-                        const d = item.dateRN?.toDate ? item.dateRN.toDate() : new Date(item.dateRN);
-                        if(!isNaN(d)) dateStr = d.toLocaleDateString('pt-BR');
-                    } catch(e){}
-                    
-                    // Cor de fundo especial para grupo sem RN
-                    if (item.isPendingGroup) {
-                        tr.className += " bg-yellow-50/60 font-bold";
-                    } else {
-                        tr.className += " bg-blue-50/60";
-                    }
-                    
-                    const referenceDisplay = item.numRN || 'AGRUPAMENTO PENDENTE';
-                    const dateInfo = item.numRN ? `Aberta em: ${dateStr}` : 'Aguardando Inserção de RN';
-
-                    // O ID passado para openGroupDetails é o numRN se existir, senão, o ID do primeiro item do grupo (para ser usado no lookup)
-                    // Se for PENDENTE, passamos o ID do PRIMEIRO item para que o modal saiba qual grupo temporário exibir/gerir
-                    const targetId = item.numRN || item.items[0].id;
-                    
-                    // NOVO: Detalhes consolidados do grupo
-                    const units = [...new Set(item.items.map(i => i.unidade))].join(', ');
-                    let previsaoStr = item.dataPrevisao;
-                    if(previsaoStr && typeof previsaoStr === 'string' && previsaoStr.includes('-')) {
-                        previsaoStr = previsaoStr.split('-').reverse().join('/');
-                    }
-
-                    tr.innerHTML = `
-    <td class="px-3 py-4 w-10"></td>
-    <td class="px-3 py-4">
-        <div class="flex items-center gap-2 text-primary-700 font-bold">
-            <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" /></svg>
-            ${referenceDisplay}
-            ${item.numOC ? `<span class="ml-1 text-xs text-gray-500 font-normal">(OC: ${item.numOC})</span>` : ''}
-        </div>
-        <div class="text-xs text-gray-500 mt-1">${dateInfo}</div>
-    </td>
-    <td class="px-3 py-4 text-sm text-gray-900" colspan="4">
-        <div class="font-medium">${item.fornecedor || '---'}</div>
-        <div class="text-xs text-gray-500">Unidades: ${units}</div>
-        <div class="text-xs text-gray-500">Previsão: ${previsaoStr || '---'}</div>
-    </td>
-    <td class="px-3 py-4 text-sm font-bold text-gray-900">R$ ${item.total.toFixed(2)}</td>
-    <td class="px-3 py-4">
-        <span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${st.class}">${st.text}</span>
-    </td>
-    <td class="px-3 py-4 text-right">
-        <button onclick="window.openGroupDetails('${targetId}')" class="text-primary-600 hover:text-primary-800 text-sm font-semibold">Ver Itens &rarr;</button>
-    </td>
-                    `;
-                } else {
-                    let displayStatusKey = item.status;
-                    if (checkIsLate(item)) {
-                        displayStatusKey = 'em-atraso';
-                    }
-
-                    const st = STATUS_MAP[displayStatusKey] || { text: item.status, class: "bg-gray-100 text-gray-600" };
-                    const dSol = item.dataSolicitacao?.toDate ? item.dataSolicitacao.toDate() : new Date();
-                    // Verifica se o ID já está na lista de selecionados
-const isChecked = state.selectedPedidos.includes(item.id) ? 'checked' : '';
-
-const check = (isMain && isGestor) ? `<input type="checkbox" class="row-checkbox h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-600" value="${item.id}" ${isChecked}>` : '';
-
-                    tr.innerHTML = `
-                        <td class="px-3 py-4 w-10 text-center">${check}</td>
-                        <td class="px-3 py-4 text-sm text-gray-500 font-mono">${item.numRN || '---'}</td>
-                        <td class="px-3 py-4 text-sm text-gray-900">
-                            <div class="font-medium">${item.unidade}</div>
-                            <div class="text-xs text-gray-500">${item.nomeDemandante}</div>
-                        </td>
-                        <td class="px-3 py-4 text-sm text-gray-900">
-                            <div class="font-medium">${item.nomeProduto}</div>
-                            <div class="text-xs text-gray-500">${item.variacao || ''}</div>
-                            ${item.segmento ? `<div class="text-xs text-blue-600 mt-0.5 bg-blue-50 inline-block px-1 rounded border border-blue-100 truncate max-w-[100px]" title="${item.segmento}">${item.segmento}</div>` : ''}
-                        </td>
-                        <td class="px-3 py-4 text-sm text-gray-500">${item.modalidade || '-'}</td>
-                        <td class="px-3 py-4 text-sm text-gray-500">${dSol.toLocaleDateString('pt-BR')}</td>
-                        <td class="px-3 py-4 text-sm font-medium text-gray-900">
-                            <div class="text-xs text-gray-400 font-normal">${item.quantidade}x ${parseFloat(item.valorUnitario).toFixed(2)}</div>
-                            R$ ${parseFloat(item.valorTotal).toFixed(2)}
-                        </td>
-                        <td class="px-3 py-4">
-                            <span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${st.class}">${st.text}</span>
-                        </td>
-                        <td class="px-3 py-4 text-right flex justify-end gap-2">
-                            <button onclick="window.openPedidoModal('${item.id}', true)" class="text-gray-400 hover:text-primary-600" title="Editar Pedido">
-                                <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
-                            </button>
-                            ${isGestor ? `<button onclick="window.openCotacaoModal('${item.id}', false)" class="text-green-600 hover:text-green-800" title="Gerar Ficha de Cotação"><svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg></button>` : ''}
-                        </td>
-                    `;
-                }
-                tbody.appendChild(tr);
-            });
-
-            if (isMain && isGestor) {
-                tbody.querySelectorAll('.row-checkbox').forEach(cb => {
-                    cb.addEventListener('change', e => {
-                        if(e.target.checked) state.selectedPedidos.push(e.target.value);
-                        else state.selectedPedidos = state.selectedPedidos.filter(x => x !== e.target.value);
-                        updateBulkActionBar();
-                    });
-                });
+        // Filtro de Busca (RN ou OC)
+        if (searchFilter) {
+            const rn = (p.numRN || '').toLowerCase();
+            const oc = (p.numOC || '').toLowerCase();
+            // Também busca pelo nome do produto ou ID para facilitar
+            const prod = (p.nomeProduto || '').toLowerCase();
+            if (!rn.includes(searchFilter) && !oc.includes(searchFilter) && !prod.includes(searchFilter)) {
+                return false;
             }
         }
+        return true;
+    });
+
+    if (list.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="10" class="py-10 text-center text-gray-500 text-sm">Nenhum pedido encontrado.</td></tr>`;
+        return;
+    }
+
+    // --- 2. AGRUPAMENTO (Lógica Visual) ---
+    const grouped = [];
+    const rnMap = new Map();
+
+    list.forEach(p => {
+        let effectiveStatus = p.status;
+        // Gestor vê status "A Inserir RN" se estiver pendente
+        if (isGestor && p.status === 'a-abrir-rn' && !p.numRN && !p.dataAberturaRN) {
+             effectiveStatus = 'a-inserir-rn';
+        }
+        
+        // Se tem RN e estamos na tela principal, agrupa
+        if (p.numRN && isMain) {
+            if (!rnMap.has(p.numRN)) {
+                rnMap.set(p.numRN, { 
+                    isGroup: true, 
+                    numRN: p.numRN, 
+                    items: [p], 
+                    total: parseFloat(p.valorTotal||0), 
+                    status: effectiveStatus, 
+                    dateRN: p.dataAberturaRN, 
+                    isPendingRN: false, 
+                    id: p.numRN, 
+                    fornecedor: p.fornecedor, 
+                    numOC: p.numOC, 
+                    dataPrevisao: p.dataPrevisao 
+                });
+                grouped.push(rnMap.get(p.numRN));
+            } else {
+                const g = rnMap.get(p.numRN);
+                g.items.push(p);
+                g.total += parseFloat(p.valorTotal||0);
+                // Status do grupo assume o do item mais recente ou mantém o atual
+                g.status = effectiveStatus;
+                
+                // Preenche dados faltantes no grupo se o primeiro item não tinha
+                if (!g.fornecedor && p.fornecedor) g.fornecedor = p.fornecedor;
+                if (!g.numOC && p.numOC) g.numOC = p.numOC;
+            }
+        } else {
+            // Item solto (sem RN ou não agrupável)
+            grouped.push({ isGroup: false, ...p, status: effectiveStatus });
+        }
+    });
+
+    // Ordenação: Grupos primeiro, depois data
+    grouped.sort((a, b) => {
+        if (a.isGroup && !b.isGroup) return -1;
+        if (!a.isGroup && b.isGroup) return 1;
+        
+        // Ordena por data (mais recente primeiro)
+        const dateA = a.dataSolicitacao?.toDate ? a.dataSolicitacao.toDate() : new Date(0);
+        const dateB = b.dataSolicitacao?.toDate ? b.dataSolicitacao.toDate() : new Date(0);
+        return dateB.getTime() - dateA.getTime();
+    });
+
+    // --- 3. RENDERIZAÇÃO DO HTML ---
+    grouped.forEach(item => {
+        const tr = document.createElement('tr');
+        tr.className = "hover:bg-gray-50 transition-colors border-b border-gray-100 last:border-0";
+        
+        // === RENDERIZAÇÃO DE GRUPO ===
+        if (item.isGroup) {
+            let displayStatusKey = item.status;
+            // Verifica atraso no primeiro item
+            if (item.items[0] && checkIsLate(item.items[0])) displayStatusKey = 'em-atraso';
+
+            const st = STATUS_MAP[displayStatusKey] || { text: item.status, class: "bg-gray-100 text-gray-600" };
+            
+            // Dados para exibição
+            let dateStr = '---';
+            let dateRaw = item.dateRN || (item.items[0] ? item.items[0].dataSolicitacao : null);
+            try {
+                const d = dateRaw?.toDate ? dateRaw.toDate() : new Date(dateRaw);
+                if(!isNaN(d)) dateStr = d.toLocaleDateString('pt-BR');
+            } catch(e){}
+
+            const modalidadeStr = item.items[0] ? item.items[0].modalidade : '-';
+            const referenceDisplay = item.numRN || 'PENDENTE';
+            const targetId = item.numRN || item.items[0].id;
+            const units = [...new Set(item.items.map(i => i.unidade))].join(', ');
+
+            // Cor de fundo do grupo
+            tr.className += item.isPendingGroup ? " bg-yellow-50/60 font-bold" : " bg-blue-50/60";
+
+            tr.innerHTML = `
+                <td class="px-3 py-4 w-10"></td>
+                <td class="px-3 py-4 text-sm text-primary-700 font-bold">
+                    <div class="flex items-center gap-1">
+                        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" /></svg>
+                        ${referenceDisplay}
+                    </div>
+                </td>
+                <td class="px-3 py-4 text-sm text-gray-900">
+                    <div class="font-medium text-xs text-gray-500 truncate max-w-[150px]" title="${units}">Várias (${item.items.length})</div>
+                    <div class="text-xs text-gray-400">${item.nomeDemandante || 'Vários'}</div>
+                </td>
+                <td class="px-3 py-4 text-sm text-gray-900">
+                    <div class="font-medium">Agrupamento</div>
+                    <div class="text-xs text-gray-500">${item.fornecedor || '-'}</div>
+                    ${item.numOC ? `<div class="text-xs text-blue-600 font-bold">OC: ${item.numOC}</div>` : ''}
+                </td>
+                <td class="px-3 py-4 text-sm text-gray-500">${modalidadeStr}</td>
+                <td class="px-3 py-4 text-sm text-gray-500">${dateStr}</td>
+                <td class="px-3 py-4 text-sm font-bold text-gray-900">R$ ${item.total.toFixed(2)}</td>
+                <td class="px-3 py-4">
+                    <span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${st.class}">${st.text}</span>
+                </td>
+                <td class="px-3 py-4 text-right">
+                    <button onclick="window.openGroupDetails('${targetId}')" class="text-primary-600 hover:text-primary-800 text-sm font-semibold">Ver Itens &rarr;</button>
+                </td>
+            `;
+        } 
+        // === RENDERIZAÇÃO DE ITEM INDIVIDUAL ===
+        else {
+            let displayStatusKey = item.status;
+            if (checkIsLate(item)) displayStatusKey = 'em-atraso';
+            
+            const st = STATUS_MAP[displayStatusKey] || { text: item.status, class: "bg-gray-100 text-gray-600" };
+            const dSol = item.dataSolicitacao?.toDate ? item.dataSolicitacao.toDate() : new Date();
+            
+            // Checkbox para seleção em massa
+            const isChecked = state.selectedPedidos.includes(item.id) ? 'checked' : '';
+            const check = (isMain && isGestor) ? `<input type="checkbox" class="row-checkbox h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-600" value="${item.id}" ${isChecked}>` : '';
+
+            tr.innerHTML = `
+                <td class="px-3 py-4 w-10 text-center">${check}</td>
+                <td class="px-3 py-4 text-sm text-gray-500 font-mono">${item.numRN || '---'}</td>
+                <td class="px-3 py-4 text-sm text-gray-900">
+                    <div class="font-medium">${item.unidade}</div>
+                    <div class="text-xs text-gray-500">${item.nomeDemandante}</div>
+                </td>
+                <td class="px-3 py-4 text-sm text-gray-900">
+                    <div class="font-medium">${item.nomeProduto}</div>
+                    <div class="text-xs text-gray-500">${item.variacao || ''}</div>
+                    ${item.segmento ? `<div class="text-xs text-blue-600 mt-0.5 bg-blue-50 inline-block px-1 rounded border border-blue-100 truncate max-w-[100px]" title="${item.segmento}">${item.segmento}</div>` : ''}
+                </td>
+                <td class="px-3 py-4 text-sm text-gray-500">${item.modalidade || '-'}</td>
+                <td class="px-3 py-4 text-sm text-gray-500">${dSol.toLocaleDateString('pt-BR')}</td>
+                <td class="px-3 py-4 text-sm font-medium text-gray-900">
+                    <div class="text-xs text-gray-400 font-normal">${item.quantidade}x ${parseFloat(item.valorUnitario).toFixed(2)}</div>
+                    R$ ${parseFloat(item.valorTotal).toFixed(2)}
+                </td>
+                <td class="px-3 py-4">
+                    <span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${st.class}">${st.text}</span>
+                </td>
+                <td class="px-3 py-4 text-right flex justify-end gap-2">
+                    <button onclick="window.openPedidoModal('${item.id}')" class="text-gray-400 hover:text-primary-600" title="Editar Pedido">
+                        <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+                    </button>
+                    ${isGestor ? `<button onclick="window.openCotacaoModal('${item.id}', false)" class="text-green-600 hover:text-green-800" title="Gerar Ficha"><svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg></button>` : ''}
+                </td>
+            `;
+        }
+        tbody.appendChild(tr);
+    });
+
+    // Listener para checkboxes (Seleção em massa)
+    if (isMain && isGestor) {
+        tbody.querySelectorAll('.row-checkbox').forEach(cb => {
+            cb.addEventListener('change', e => {
+                if(e.target.checked) state.selectedPedidos.push(e.target.value);
+                else state.selectedPedidos = state.selectedPedidos.filter(x => x !== e.target.value);
+                updateBulkActionBar();
+            });
+        });
+    }
+};
+        
 
 // Função para limpar seleção visual e interna
         window.clearSelection = () => {
@@ -628,54 +710,96 @@ const check = (isMain && isGestor) ? `<input type="checkbox" class="row-checkbox
         };
 
         // --- NOVA TABELA DE SERVIÇOS ---
-        function renderServicosPage() {
-            const tbody = document.getElementById('tabela-servicos-body');
-            if (!tbody) return;
-            tbody.innerHTML = '';
+// CORREÇÃO: Sintaxe correta para tornar a função global
+// CORRIGIDO: window.renderServicosPage = function() ...
+window.renderServicosPage = function() {
+    const tbody = document.getElementById('tabela-servicos-body');
+    if (!tbody) return;
+    tbody.innerHTML = '';
 
-            const perfil = currentUserProfile.perfil || "Solicitante";
-            
-            // Filtra APENAS serviços
-            let list = state.pedidos.filter(p => {
-                if (p.modalidade !== 'Serviço') return false;
-                if (perfil === 'Solicitante' && p.solicitanteId !== currentUser.uid && p.nomeDemandante !== currentUserProfile.nome) return false;
-                return true;
-            });
+    const perfil = currentUserProfile.perfil || "Solicitante";
 
-            if (list.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="7" class="py-10 text-center text-gray-500 text-sm">Nenhum serviço solicitado.</td></tr>`;
-                return;
-            }
+    // --- 1. POPULAR FILTROS (Unidade e Status) se necessário ---
+    const selUnidade = document.getElementById('filter-serv-unidade');
+    const selStatus = document.getElementById('filter-serv-status');
 
-            list.forEach(item => {
-                const st = STATUS_MAP[item.status] || { text: item.status, class: "bg-gray-100" };
-                let previsaoStr = '-';
-                if(item.dataPrevisao) {
-                    // DataPrevisao salva como string YYYY-MM-DD no form de serviço
-                    const parts = item.dataPrevisao.split('-');
-                    previsaoStr = `${parts[2]}/${parts[1]}/${parts[0]}`;
-                }
+    // Popula Unidades se tiver apenas a opção padrão
+    if (selUnidade && selUnidade.options.length <= 1 && state.unidades.length > 0) {
+        state.unidades.forEach(u => selUnidade.innerHTML += `<option value="${u}">${u}</option>`);
+    }
+    // Popula Status se tiver apenas a opção padrão
+    if (selStatus && selStatus.options.length <= 1) {
+        Object.entries(STATUS_MAP).filter(([k]) => k !== 'a-inserir-rn').forEach(([k,v]) => {
+            selStatus.innerHTML += `<option value="${k}">${v.text}</option>`;
+        });
+    }
 
-                tbody.innerHTML += `
-                    <tr class="hover:bg-gray-50 border-b border-gray-100">
-                        <td class="px-4 py-3 text-sm text-gray-900">${item.unidade}</td>
-                        <td class="px-4 py-3 text-sm text-gray-900">
-                            <div class="font-medium">${item.projeto || '-'}</div>
-                            <div class="text-xs text-gray-500 truncate max-w-xs" title="${item.nomeProduto}">${item.nomeProduto}</div>
-                        </td>
-                        <td class="px-4 py-3 text-sm text-gray-500">${item.cr || '-'}</td>
-                        <td class="px-4 py-3 text-sm text-gray-900">${item.fornecedor || '-'}</td>
-                        <td class="px-4 py-3 text-sm text-gray-900 font-mono">${previsaoStr}</td>
-                        <td class="px-4 py-3">
-                            <span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${st.class}">${st.text}</span>
-                        </td>
-                        <td class="px-4 py-3 text-right">
-                             ${item.urlOrcamento ? `<a href="${item.urlOrcamento}" target="_blank" class="text-blue-600 hover:underline text-xs mr-2">Ver Orçamento</a>` : ''}
-                        </td>
-                    </tr>
-                `;
-            });
+    // --- 2. LER VALORES DOS FILTROS ---
+    const fUnidade = selUnidade?.value || '';
+    const fFornecedor = document.getElementById('filter-serv-fornecedor')?.value.toLowerCase() || '';
+    const fData = document.getElementById('filter-serv-data')?.value || '';
+    const fStatus = selStatus?.value || '';
+
+    // --- 3. FILTRAGEM ---
+    let list = state.pedidos.filter(p => {
+        // Filtro Básico (Tipo e Permissão)
+        if (p.modalidade !== 'Serviço') return false;
+        if (perfil === 'Solicitante' && p.solicitanteId !== currentUser.uid && p.nomeDemandante !== currentUserProfile.nome) return false;
+
+        // Filtros da Tela
+        if (fUnidade && p.unidade !== fUnidade) return false;
+        if (fStatus && p.status !== fStatus) return false;
+        if (fFornecedor && !(p.fornecedor || '').toLowerCase().includes(fFornecedor)) return false;
+        if (fData && p.dataPrevisao !== fData) return false; // Filtro de data exata
+
+        return true;
+    });
+
+    if (list.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="7" class="py-10 text-center text-gray-500 text-sm">Nenhum serviço encontrado.</td></tr>`;
+        return;
+    }
+
+    // --- 4. RENDERIZAÇÃO ---
+    list.forEach(item => {
+        const st = STATUS_MAP[item.status] || { text: item.status, class: "bg-gray-100" };
+        let previsaoStr = '-';
+        if(item.dataPrevisao) {
+            const parts = item.dataPrevisao.split('-');
+            previsaoStr = `${parts[2]}/${parts[1]}/${parts[0]}`;
         }
+
+        const canEdit = (perfil === 'Solicitante' && item.status === 'enviado-aquisicao') || perfil !== 'Solicitante';
+        const buttonsHtml = canEdit ? `
+            <button onclick="window.openServicoModal('${item.id}')" class="text-blue-600 hover:text-blue-800 mr-2" title="Editar">
+                <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+            </button>
+            <button onclick="window.deleteServico('${item.id}')" class="text-red-600 hover:text-red-800" title="Excluir">
+                <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+            </button>
+        ` : '';
+
+        tbody.innerHTML += `
+            <tr class="hover:bg-gray-50 border-b border-gray-100">
+                <td class="px-4 py-3 text-sm text-gray-900">${item.unidade}</td>
+                <td class="px-4 py-3 text-sm text-gray-900">
+                    <div class="font-medium">${item.projeto || '-'}</div>
+                    <div class="text-xs text-gray-500 truncate max-w-xs" title="${item.nomeProduto}">${item.nomeProduto}</div>
+                </td>
+                <td class="px-4 py-3 text-sm text-gray-500">${item.cr || '-'}</td>
+                <td class="px-4 py-3 text-sm text-gray-900">${item.fornecedor || '-'}</td>
+                <td class="px-4 py-3 text-sm text-gray-900 font-mono">${previsaoStr}</td>
+                <td class="px-4 py-3">
+                    <span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${st.class}">${st.text}</span>
+                </td>
+                <td class="px-4 py-3 text-right flex justify-end items-center gap-2">
+                     ${item.urlOrcamento ? `<a href="${item.urlOrcamento}" target="_blank" class="text-blue-600 hover:underline text-xs mr-2 border border-blue-200 px-2 py-1 rounded bg-blue-50">Orçamento</a>` : ''}
+                     ${buttonsHtml}
+                </td>
+            </tr>
+        `;
+    });
+};
 
         // --- UNIDADES (NOVO) ---
         function renderUnidadesPage() {
@@ -715,6 +839,129 @@ const check = (isMain && isGestor) ? `<input type="checkbox" class="row-checkbox
             });
         };
         
+// --- Lógica de Validação de Funcionário no Serviço ---
+
+// 1. Filtra a lista de funcionários com base no fornecedor selecionado
+// --- Lógica Inteligente de Funcionários no Serviço ---
+
+// 1. Chamada quando o usuário seleciona ou digita uma Empresa
+window.filterEmployeesBySupplier = () => {
+    const form = document.getElementById('form-servico');
+    const fornecedorNome = form.fornecedor.value.trim();
+    const dl = document.getElementById('datalist-funcionarios-servico');
+    
+    // Limpa a lista anterior
+    dl.innerHTML = '';
+    
+    // Se não tiver empresa selecionada, não lista nada
+    if (!fornecedorNome) return;
+
+    // Filtra no seu estado global os funcionários daquela empresa
+    // Usa toLowerCase() para evitar erros de maiúsculas/minúsculas
+    const funcsFiltrados = state.funcionarios.filter(f => 
+        f.empresa.toLowerCase() === fornecedorNome.toLowerCase()
+    );
+    
+    // Preenche o datalist (Isso permite que o navegador sugira os nomes)
+    funcsFiltrados.forEach(f => {
+        const option = document.createElement('option');
+        option.value = f.nome;
+        // Opcional: Mostrar o tipo de documento na sugestão
+        option.label = `${f.tipoDoc} (Emitido: ${new Date(f.dataEmissao).toLocaleDateString('pt-BR')})`;
+        dl.appendChild(option);
+    });
+
+    // Opcional: Se quiser limpar o campo funcionário ao trocar de empresa (recomendado)
+    // Mas verificamos se o valor atual ainda é válido para não limpar à toa
+    const currentFuncVal = form.funcionario.value;
+    const isValid = funcsFiltrados.some(f => f.nome === currentFuncVal);
+    if (!isValid && currentFuncVal) {
+        // Se a empresa mudou e o funcionário antigo não é dela, limpa e avisa
+        form.funcionario.value = '';
+        document.getElementById('service-employee-alert').innerHTML = '';
+        document.getElementById('service-employee-alert').classList.add('hidden');
+    }
+};
+
+// 2. Chamada a cada letra digitada no campo Funcionário
+window.validateServiceEmployee = () => {
+    const form = document.getElementById('form-servico');
+    const alertDiv = document.getElementById('service-employee-alert');
+    
+    const funcName = form.funcionario.value.trim();
+    const fornecedorName = form.fornecedor.value.trim();
+    const dataServicoStr = form.dataPrevisao.value; // Data que o serviço vai acontecer
+
+    // Reseta o alerta visual
+    alertDiv.className = 'text-xs hidden';
+    alertDiv.innerHTML = '';
+
+    if (!funcName) return; // Se vazio, não faz nada
+    if (!fornecedorName) {
+        alertDiv.innerHTML = '⚠️ Selecione primeiro o fornecedor.';
+        alertDiv.className = 'text-xs mt-2 p-2 rounded bg-yellow-50 text-yellow-700 block';
+        return;
+    }
+
+    // Procura o funcionário exato na lista
+    const func = state.funcionarios.find(f => 
+        f.nome.toLowerCase() === funcName.toLowerCase() && 
+        f.empresa.toLowerCase() === fornecedorName.toLowerCase()
+    );
+
+    if (!func) {
+        // Se digitou um nome que não está na lista
+        alertDiv.innerHTML = '⚠️ Funcionário não encontrado na base de dados desta empresa. Cadastre-o primeiro.';
+        alertDiv.className = 'text-xs mt-2 p-2 rounded bg-gray-100 text-gray-600 block border border-gray-200';
+        return;
+    }
+
+    // --- CÁLCULOS DE VALIDADE ---
+    let dataEmissao;
+    try { 
+        // Resolve problema de fuso horário adicionando T00:00:00
+        dataEmissao = new Date(func.dataEmissao + 'T00:00:00'); 
+    } catch(e) { return; }
+    
+    // Define validade baseada no tipo
+    const validadeDias = func.tipoDoc === 'FAP' ? 60 : 365;
+    
+    const dataVencimento = new Date(dataEmissao);
+    dataVencimento.setDate(dataVencimento.getDate() + validadeDias);
+    
+    const hoje = new Date();
+    hoje.setHours(0,0,0,0);
+
+    let dataServico = null;
+    if (dataServicoStr) {
+        dataServico = new Date(dataServicoStr + 'T00:00:00');
+    }
+
+    // Formata datas para exibir
+    const venctoFmt = dataVencimento.toLocaleDateString('pt-BR');
+    
+    // --- CENÁRIOS DE ALERTA ---
+
+    // 1. Já está vencido hoje?
+    if (dataVencimento < hoje) {
+        alertDiv.innerHTML = `⛔ <strong>BLOQUEADO:</strong> O documento (${func.tipoDoc}) venceu em ${venctoFmt}. Regularize o cadastro.`;
+        alertDiv.className = 'text-xs mt-2 p-2 rounded bg-red-100 text-red-800 border border-red-300 block';
+        return;
+    }
+
+    // 2. Vai vencer antes do serviço acontecer?
+    if (dataServico && dataVencimento < dataServico) {
+        alertDiv.innerHTML = `⚠️ <strong>ATENÇÃO:</strong> Documento válido hoje, mas estará <strong>VENCIDO</strong> na data do serviço (${dataServico.toLocaleDateString('pt-BR')}). Vence em: ${venctoFmt}.`;
+        alertDiv.className = 'text-xs mt-2 p-2 rounded bg-orange-100 text-orange-900 border border-orange-300 block';
+        return;
+    }
+
+    // 3. Tudo Certo
+    alertDiv.innerHTML = `✅ <strong>OK:</strong> Documento ${func.tipoDoc} válido até ${venctoFmt}.`;
+    alertDiv.className = 'text-xs mt-2 p-2 rounded bg-green-50 text-green-700 border border-green-200 block';
+};
+
+
         window.openUnidadeModal = (id = null) => {
             const f = document.getElementById('form-unidade');
             f.reset();
@@ -767,6 +1014,172 @@ const check = (isMain && isGestor) ? `<input type="checkbox" class="row-checkbox
 
             modal.classList.remove('hidden');
         };
+
+
+// --- LÓGICA DE FUNCIONÁRIOS ---
+
+// Abrir Modal
+window.openFuncionariosModal = () => {
+    const f = document.getElementById('form-funcionario');
+    f.reset();
+    f.dataset.id = ""; // Limpa ID para novo cadastro
+    
+    // Preenche o Datalist de Fornecedores
+    const dl = document.getElementById('datalist-fornecedores-func');
+    dl.innerHTML = '';
+    state.fornecedores.forEach(forn => {
+        dl.innerHTML += `<option value="${forn.nome}">`;
+    });
+
+    renderFuncionariosTable();
+    document.getElementById('modal-funcionarios').classList.remove('hidden');
+};
+
+// Renderizar Tabela
+// CORREÇÃO: Sintaxe correta para tornar a função global
+window.renderFuncionariosTable = function() {
+    const tbody = document.getElementById('table-funcionarios-body');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+
+    // 1. Ler Filtros
+    const fNome = document.getElementById('filter-func-nome')?.value.toLowerCase() || '';
+    const fEmpresa = document.getElementById('filter-func-empresa')?.value.toLowerCase() || '';
+    const fValidade = document.getElementById('filter-func-validade')?.value || '';
+
+    const hoje = new Date();
+    hoje.setHours(0,0,0,0);
+
+    // 2. Filtrar Lista
+    const listaFiltrada = state.funcionarios.filter(func => {
+        // Filtro de Texto
+        if (fNome && !func.nome.toLowerCase().includes(fNome)) return false;
+        if (fEmpresa && !func.empresa.toLowerCase().includes(fEmpresa)) return false;
+
+        // Cálculo de Validade para filtro
+        let dataEmissao;
+        try { dataEmissao = new Date(func.dataEmissao + 'T00:00:00'); } catch(e) { return false; }
+        const diasValidade = func.tipoDoc === 'FAP' ? 60 : 365;
+        const dataVencimento = new Date(dataEmissao);
+        dataVencimento.setDate(dataVencimento.getDate() + diasValidade);
+        
+        const isVencido = dataVencimento < hoje;
+
+        // Filtro de Situação
+        if (fValidade === 'vencidos' && !isVencido) return false;
+        if (fValidade === 'validos' && isVencido) return false;
+
+        return true;
+    });
+
+    if (listaFiltrada.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="6" class="p-4 text-center text-gray-500 text-sm">Nenhum funcionário encontrado com estes filtros.</td></tr>`;
+        return;
+    }
+
+    // 3. Renderizar
+    listaFiltrada.forEach(func => {
+        let dataEmissao = new Date(func.dataEmissao + 'T00:00:00');
+        const diasValidade = func.tipoDoc === 'FAP' ? 60 : 365;
+        const dataVencimento = new Date(dataEmissao);
+        dataVencimento.setDate(dataVencimento.getDate() + diasValidade);
+        
+        const isVencido = dataVencimento < hoje;
+        const rowClass = isVencido ? 'bg-red-50 border-l-4 border-red-500' : 'hover:bg-gray-50';
+        const statusBadge = isVencido 
+            ? `<span class="bg-red-100 text-red-800 text-xs font-bold px-2 py-1 rounded">VENCIDO</span>`
+            : `<span class="bg-green-100 text-green-800 text-xs font-bold px-2 py-1 rounded">VÁLIDO</span>`;
+
+        tbody.innerHTML += `
+            <tr class="${rowClass} border-b border-gray-100">
+                <td class="px-4 py-3">
+                    <div class="text-sm font-medium text-gray-900">${func.nome}</div>
+                    <div class="text-xs text-gray-500">${func.empresa}</div>
+                </td>
+                <td class="px-4 py-3 text-sm text-gray-700">${func.tipoDoc}</td>
+                <td class="px-4 py-3 text-sm text-gray-600">${dataEmissao.toLocaleDateString('pt-BR')}</td>
+                <td class="px-4 py-3 text-sm font-bold ${isVencido ? 'text-red-700' : 'text-gray-600'}">
+                    ${dataVencimento.toLocaleDateString('pt-BR')}
+                </td>
+                <td class="px-4 py-3 text-sm">${statusBadge}</td>
+                <td class="px-4 py-3 text-right flex justify-end gap-2 items-center">
+                    ${func.urlAnexo ? `<a href="${func.urlAnexo}" target="_blank" class="text-blue-600 hover:text-blue-800" title="Ver Documento"><svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg></a>` : ''}
+                    <button onclick="editFuncionario('${func.id}')" class="text-gray-500 hover:text-blue-600"><svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg></button>
+                    <button onclick="deleteFuncionario('${func.id}')" class="text-gray-500 hover:text-red-600"><svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg></button>
+                </td>
+            </tr>
+        `;
+    });
+};
+
+// Salvar Funcionário
+document.getElementById('form-funcionario').addEventListener('submit', async e => {
+    e.preventDefault();
+    const f = e.target;
+    const btn = f.querySelector('button[type="submit"]');
+    const docId = f.dataset.id;
+
+    btn.disabled = true; btn.textContent = "...";
+
+    try {
+        const data = {
+            empresa: f.empresa.value,
+            nome: f.nome.value,
+            tipoDoc: f.tipoDoc.value,
+            dataEmissao: f.dataEmissao.value
+        };
+
+        // Upload Anexo (se houver)
+        if (f.fileDoc.files[0]) {
+            const file = f.fileDoc.files[0];
+            const r = ref(storage, `artifacts/${appId}/docs_funcionarios/${Date.now()}_${file.name}`);
+            await uploadBytes(r, file);
+            data.urlAnexo = await getDownloadURL(r);
+        }
+
+        if (docId) {
+            await updateDoc(doc(db, `artifacts/${appId}/public/data/funcionarios`, docId), data);
+            showNotification("Funcionário atualizado!", "success");
+        } else {
+            await addDoc(collection(db, `artifacts/${appId}/public/data/funcionarios`), data);
+            showNotification("Funcionário cadastrado!", "success");
+        }
+        
+        f.reset();
+        f.dataset.id = "";
+        // Não fecha o modal, apenas reseta o form para permitir cadastrar outro em sequência
+        
+    } catch(err) {
+        console.error(err);
+        showNotification("Erro ao salvar.", "error");
+    } finally {
+        btn.disabled = false; btn.textContent = "Salvar";
+    }
+});
+
+// Editar Funcionário
+window.editFuncionario = (id) => {
+    const func = state.funcionarios.find(x => x.id === id);
+    if (!func) return;
+    
+    const f = document.getElementById('form-funcionario');
+    f.empresa.value = func.empresa;
+    f.nome.value = func.nome;
+    f.tipoDoc.value = func.tipoDoc;
+    f.dataEmissao.value = func.dataEmissao;
+    f.dataset.id = id;
+    
+    // Rola para o topo do modal para ver o form
+    document.querySelector('#modal-funcionarios .overflow-y-auto').scrollTop = 0;
+};
+
+// Excluir Funcionário
+window.deleteFuncionario = (id) => {
+    if(confirm("Deseja excluir este funcionário?")) {
+        deleteDoc(doc(db, `artifacts/${appId}/public/data/funcionarios`, id));
+    }
+};
+
 
         window.closeCotacaoModal = () => {
              document.getElementById('modal-ficha-cotacao').classList.add('hidden');
@@ -928,61 +1341,123 @@ const check = (isMain && isGestor) ? `<input type="checkbox" class="row-checkbox
         };
 
         // --- MODAL SERVIÇO ---
-        window.openServicoModal = () => {
-            const f = document.getElementById('form-servico');
-            f.reset();
-            
-            // Sincronização de filtro: Se filtro de unidade estiver ativo, usa no modal
-            const filterU = document.getElementById('filter-unidade')?.value;
-            if(filterU) {
-                f.unidade.value = filterU;
-            } else {
-                // Usa a unidade padrão do perfil
-                f.unidade.value = currentUserProfile.unidade;
-            }
-            
-            // Preenche selects
-            f.unidade.innerHTML = ''; 
-            state.unidades.forEach(x=> f.unidade.innerHTML += `<option value="${x}">${x}</option>`);
-            if(filterU) f.unidade.value = filterU;
-            else f.unidade.value = currentUserProfile.unidade;
+window.openServicoModal = (id = null) => {
+    const f = document.getElementById('form-servico');
+    f.reset();
+    f.dataset.id = id || "";
+    
+    // Limpa alertas
+    const alertDiv = document.getElementById('service-employee-alert');
+    if(alertDiv) alertDiv.classList.add('hidden');
+
+    const btnSubmit = f.querySelector('button[type="submit"]');
+    const titleModal = f.closest('.relative').querySelector('h3');
+    
+    // 1. Preenche Unidades
+    f.unidade.innerHTML = ''; 
+    state.unidades.forEach(x => f.unidade.innerHTML += `<option value="${x}">${x}</option>`);
+
+    // 2. Preenche Status (NOVO)
+    f.status.innerHTML = '';
+    // Adiciona opções de status. Se for Solicitante criando, trava em 'enviado-aquisicao' visualmente ou deixa selecionar?
+    // Vamos deixar selecionar para simplificar a edição
+    Object.entries(STATUS_MAP).filter(([k]) => k !== 'a-inserir-rn').forEach(([k,v]) => {
+         f.status.innerHTML += `<option value="${k}">${v.text}</option>`;
+    });
+
+    // 3. Preenche Datalist de Fornecedores
+    const dlForn = document.getElementById('fornecedores-datalist-servico');
+    dlForn.innerHTML = '';
+    state.fornecedores.forEach(forn => dlForn.innerHTML += `<option value="${forn.nome}">`);
 
 
-            document.getElementById('modal-servico').classList.remove('hidden');
-        };
+    if (id) {
+        // --- EDIÇÃO ---
+        const item = state.pedidos.find(p => p.id === id);
+        if (item) {
+            f.unidade.value = item.unidade || '';
+            f.status.value = item.status || 'enviado-aquisicao'; // Preenche Status
+            f.cr.value = item.cr || '';
+            f.projeto.value = item.projeto || '';
+            f.descricao.value = item.nomeProduto || ''; 
+            f.dataPrevisao.value = item.dataPrevisao || '';
+            f.fornecedor.value = item.fornecedor || '';
+            f.funcionario.value = item.funcionario || ''; // Preenche Funcionário
+
+            if(titleModal) titleModal.textContent = "Editar Serviço";
+            if(btnSubmit) btnSubmit.textContent = "Atualizar Serviço";
+            
+            // Dispara validação inicial se já tiver dados
+            if(item.fornecedor) window.filterEmployeesBySupplier(); 
+            if(item.funcionario) window.validateServiceEmployee();
+        }
+    } else {
+        // --- CRIAÇÃO ---
+        if(titleModal) titleModal.textContent = "Nova Solicitação de Serviço";
+        if(btnSubmit) btnSubmit.textContent = "Solicitar Serviço";
+        f.status.value = 'enviado-aquisicao'; // Padrão
+        
+        // Se for Solicitante, talvez queira bloquear a mudança de status na criação
+        // if (currentUserProfile.perfil === 'Solicitante') f.status.disabled = true;
+    }
+
+    document.getElementById('modal-servico').classList.remove('hidden');
+};
+
+
         window.closeServicoModal = () => document.getElementById('modal-servico').classList.add('hidden');
         
-        // NOVO: Modal para ver anexos
-        window.openAttachmentsModal = function(attachments) {
-            const modal = document.getElementById('modal-anexos');
-            const list = document.getElementById('attachments-list');
-            list.innerHTML = '';
+// Variável global para controlar quem é o "Pai"
+let attachmentParentModalId = null;
 
-            // Fecha o modal de pedido (o pai) para dar foco ao modal de anexos
-            document.getElementById('modal-pedido')?.classList.add('hidden');
+// Função ATUALIZADA de abrir (para garantir que salva o pai)
+window.openAttachmentsModal = function(attachments, parentId = null) {
+    const modal = document.getElementById('modal-anexos');
+    const list = document.getElementById('attachments-list');
+    list.innerHTML = '';
 
+    // 1. Salva quem chamou (pode ser 'modal-pedido', 'modal-fornecedor' ou null)
+    attachmentParentModalId = parentId;
 
-            if (attachments && attachments.length > 0) {
-                 attachments.forEach((url, index) => {
-                    const filename = url.substring(url.lastIndexOf('%2F') + 3).split('?')[0]; // Tenta extrair o nome
-                    list.innerHTML += `
-                        <a href="${url}" target="_blank" class="flex items-center justify-between p-3 border-b hover:bg-gray-50 transition-colors">
-                            <span class="text-sm text-blue-600 truncate">${filename || `Anexo ${index + 1}`}</span>
-                            <svg class="w-4 h-4 flex-shrink-0 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
-                        </a>
-                    `;
-                 });
-            } else {
-                 list.innerHTML = '<p class="text-center text-gray-500 py-4 text-sm">Nenhum arquivo anexado.</p>';
-            }
+    // 2. Se houver um pai, esconde ele momentaneamente
+    if (attachmentParentModalId) {
+        document.getElementById(attachmentParentModalId)?.classList.add('hidden');
+    }
 
-            modal.classList.remove('hidden');
-        };
-        window.closeAttachmentsModal = () => {
-             document.getElementById('modal-anexos').classList.add('hidden');
-             // Reabre o modal de pedido ao fechar o modal de anexos (se estiver aberto)
-             document.getElementById('modal-pedido')?.classList.remove('hidden');
-        }
+    // Renderiza a lista de arquivos
+    if (attachments && attachments.length > 0) {
+         attachments.forEach((url, index) => {
+            let filename = `Anexo ${index + 1}`;
+            try {
+                const decoded = decodeURIComponent(url);
+                filename = decoded.substring(decoded.lastIndexOf('/') + 1).split('?')[0].replace(/^\d+_/, '');
+            } catch (e) {}
+
+            list.innerHTML += `
+                <a href="${url}" target="_blank" class="flex items-center justify-between p-3 border-b hover:bg-gray-50 transition-colors">
+                    <span class="text-sm text-blue-600 truncate max-w-[250px]" title="${filename}">${filename}</span>
+                    <svg class="w-4 h-4 flex-shrink-0 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
+                </a>
+            `;
+         });
+    } else {
+         list.innerHTML = '<p class="text-center text-gray-500 py-4 text-sm">Nenhum arquivo anexado.</p>';
+    }
+
+    modal.classList.remove('hidden');
+};
+
+// Função ATUALIZADA de fechar (AQUI ESTAVA O ERRO)
+// Função ATUALIZADA de fechar
+window.closeAttachmentsModal = () => {
+     document.getElementById('modal-anexos').classList.add('hidden');
+     
+     // CORREÇÃO: Só reabre o modal anterior SE ele foi definido
+     if (attachmentParentModalId) {
+         document.getElementById(attachmentParentModalId)?.classList.remove('hidden');
+         attachmentParentModalId = null; // Limpa a memória para não abrir errado depois
+     }
+}
 
 
         // --- GESTÃO DE NF ---
@@ -1263,46 +1738,152 @@ const check = (isMain && isGestor) ? `<input type="checkbox" class="row-checkbox
 
         window.closeNFModal = () => document.getElementById('modal-nf').classList.add('hidden');
 
-        // --- FORNECEDORES ---
-        function renderFornecedoresPage() {
-            const tbody = document.getElementById('tabela-fornecedores-body');
-            if (!tbody) return;
-            tbody.innerHTML = '';
-            
-            const searchName = document.getElementById('search-fornecedor-name')?.value.toLowerCase() || '';
-            const searchSegmento = document.getElementById('search-fornecedor-segmento')?.value.toLowerCase() || '';
-            
-            let filteredList = state.fornecedores.filter(f => {
-                const matchesName = f.nome.toLowerCase().includes(searchName);
-                const matchesSegmento = (f.segmento || '').toLowerCase().includes(searchSegmento);
-                return matchesName && matchesSegmento;
-            });
-            
-            if (filteredList.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="6" class="py-8 text-center text-gray-500">Nenhum fornecedor cadastrado ou encontrado.</td></tr>`;
-                return;
-            }
+       // --- FORNECEDORES (ATUALIZADO COM BARRA DE GASTOS) ---
+function renderFornecedoresPage() {
+    const tbody = document.getElementById('tabela-fornecedores-body');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+    
+    const searchName = document.getElementById('search-fornecedor-name')?.value.toLowerCase() || '';
+    const searchSegmento = document.getElementById('search-fornecedor-segmento')?.value.toLowerCase() || '';
+    
+    const LIMITE_POR_UNIDADE = 92000;
+    const currentYear = new Date().getFullYear();
 
-            filteredList.forEach(f => {
-                tbody.innerHTML += `
-                    <tr class="border-b border-gray-100 hover:bg-gray-50">
-                        <td class="px-4 py-3 text-sm font-medium text-gray-900">${f.nome}</td>
-                        <td class="px-4 py-3 text-sm text-gray-600">${f.cnpj || '-'}</td>
-                        <td class="px-4 py-3 text-sm text-gray-600">${f.segmento || '-'}</td>
-                        <td class="px-4 py-3 text-sm text-gray-600">${f.telefone || '-'}</td>
-                        <td class="px-4 py-3 text-sm text-gray-600 truncate max-w-xs" title="${f.endereco}">${f.endereco || '-'}</td>
-                        <td class="px-4 py-3 text-right flex justify-end gap-3">
-    <button onclick="editFornecedor('${f.id}')" class="text-primary-600 hover:text-primary-800 text-sm font-medium">
-        Editar
-    </button>
-    <button onclick="deleteFornecedor('${f.id}')" class="text-red-500 hover:text-red-700">
-        <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-    </button>
-</td>
-                    </tr>
-                `;
-            });
+    let filteredList = state.fornecedores.filter(f => {
+        const matchesName = f.nome.toLowerCase().includes(searchName);
+        const matchesSegmento = (f.segmento || '').toLowerCase().includes(searchSegmento);
+        return matchesName && matchesSegmento;
+    });
+    
+    if (filteredList.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="6" class="py-8 text-center text-gray-500">Nenhum fornecedor encontrado.</td></tr>`;
+        return;
+    }
+
+    filteredList.forEach(f => {
+        // --- 1. LÓGICA DA BARRA DE GASTOS ---
+        const gastosPorUnidade = {};
+        
+        state.pedidos.forEach(p => {
+            if (!p.fornecedor || p.fornecedor.trim() !== f.nome.trim()) return;
+            if (p.status === 'cancelado') return;
+
+            let pDate = new Date();
+            if (p.dataSolicitacao) {
+                pDate = p.dataSolicitacao.toDate ? p.dataSolicitacao.toDate() : new Date(p.dataSolicitacao);
+            }
+            
+            if (pDate.getFullYear() === currentYear) {
+                const unidade = p.unidade || 'Sem Unidade';
+                if (!gastosPorUnidade[unidade]) gastosPorUnidade[unidade] = 0;
+                gastosPorUnidade[unidade] += parseFloat(p.valorTotal || 0);
+            }
+        });
+
+        let maxUnidade = null;
+        let maxValor = 0;
+        const listaUnidades = Object.entries(gastosPorUnidade).sort((a, b) => b[1] - a[1]);
+
+        if (listaUnidades.length > 0) {
+            maxUnidade = listaUnidades[0][0];
+            maxValor = listaUnidades[0][1];
         }
+
+        let mainBarHtml = '<span class="text-xs text-gray-400 italic">Nenhum gasto neste ano.</span>';
+        
+        if (maxUnidade) {
+            const pct = Math.min(100, (maxValor / LIMITE_POR_UNIDADE) * 100);
+            let color = 'bg-green-600';
+            let msg = '';
+            if (maxValor > LIMITE_POR_UNIDADE) { color = 'bg-red-600'; msg = '(ESTOUROU)'; }
+            else if (pct > 80) { color = 'bg-orange-500'; msg = '(ALERTA)'; }
+            const valFmt = maxValor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+            
+            mainBarHtml = `
+                <div class="flex flex-col w-full cursor-pointer group" onclick="toggleSupplierDetails('${f.id}')">
+                    <div class="flex justify-between mb-1 items-center">
+                        <div class="flex items-center gap-2">
+                            <span class="text-xs font-bold text-gray-700 bg-gray-100 px-2 py-0.5 rounded border border-gray-200">
+                                Maior: ${maxUnidade}
+                            </span>
+                            <span class="text-xs text-gray-500">${valFmt} <span class="${color === 'bg-red-600' ? 'text-red-600 font-bold' : ''}">${msg}</span></span>
+                        </div>
+                        <div class="flex items-center text-blue-600 text-xs font-semibold group-hover:underline">
+                            Ver ${listaUnidades.length} unidade(s)
+                            <svg id="icon-${f.id}" class="w-4 h-4 ml-1 transition-transform duration-200" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" /></svg>
+                        </div>
+                    </div>
+                    <div class="w-full bg-gray-200 rounded-full h-2">
+                        <div class="${color} h-2 rounded-full" style="width: ${pct}%"></div>
+                    </div>
+                </div>
+            `;
+        }
+
+        let detailsHtml = '';
+        listaUnidades.forEach(([unidade, valor]) => {
+            const pct = Math.min(100, (valor / LIMITE_POR_UNIDADE) * 100);
+            let color = 'bg-blue-500'; 
+            if (valor > LIMITE_POR_UNIDADE) color = 'bg-red-600';
+            else if (pct > 80) color = 'bg-orange-500';
+            const valFmt = valor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
+            detailsHtml += `
+                <div class="flex items-center gap-4 py-2 border-b border-gray-100 last:border-0">
+                    <div class="w-1/4 text-xs font-medium text-gray-700 truncate" title="${unidade}">${unidade}</div>
+                    <div class="flex-1">
+                        <div class="w-full bg-gray-100 rounded-full h-1.5">
+                            <div class="${color} h-1.5 rounded-full" style="width: ${pct}%"></div>
+                        </div>
+                    </div>
+                    <div class="w-24 text-right text-xs text-gray-600">${valFmt}</div>
+                </div>
+            `;
+        });
+
+        // --- 2. LÓGICA DOS ANEXOS (Definida ANTES do HTML) ---
+        const temAnexos = f.urlAnexos && f.urlAnexos.length > 0;
+        const anexoClass = temAnexos ? "text-blue-600 hover:text-blue-800" : "text-gray-300 cursor-not-allowed";
+       // Agora chamamos a função nova passando apenas o ID (texto simples)
+const anexoAction = temAnexos ? `onclick="window.openSupplierAttachments('${f.id}')"` : "";
+
+        // --- 3. RENDERIZAÇÃO DO HTML ---
+        tbody.innerHTML += `
+            <tr class="border-t border-gray-100 hover:bg-gray-50 transition-colors">
+                <td class="px-4 py-4 text-sm font-medium text-gray-900">${f.nome}</td>
+                <td class="px-4 py-4 text-sm text-gray-600">${f.cnpj || '-'}</td>
+                <td class="px-4 py-4 text-sm text-gray-600">${f.segmento || '-'}</td>
+                <td class="px-4 py-4 text-sm text-gray-600">${f.telefone || '-'}</td>
+                <td class="px-4 py-4 text-sm text-gray-600 truncate max-w-xs" title="${f.endereco}">${f.endereco || '-'}</td>
+                
+                <td class="px-4 py-4 text-right">
+                    <div class="flex justify-end gap-3 items-center">
+                        <button ${anexoAction} class="${anexoClass}" title="${temAnexos ? 'Ver Documentos' : 'Sem Documentos'}">
+                            <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+                            </svg>
+                        </button>
+
+                        <button onclick="editFornecedor('${f.id}')" class="text-primary-600 hover:text-primary-800 text-xs font-bold uppercase">Editar</button>
+                        <button onclick="deleteFornecedor('${f.id}')" class="text-red-500 hover:text-red-700">
+                            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                        </button>
+                    </div>
+                </td>
+            </tr>
+            <tr class="border-b border-gray-200 bg-gray-50/50">
+                <td colspan="6" class="px-4 pb-4 pt-0">
+                    ${mainBarHtml}
+                    <div id="details-${f.id}" class="hidden mt-3 bg-white border border-gray-200 rounded-md p-3 shadow-inner">
+                        <h4 class="text-xs font-bold text-gray-400 uppercase mb-2">Detalhamento por Unidade (Limite: R$ 92k/unidade)</h4>
+                        ${detailsHtml}
+                    </div>
+                </td>
+            </tr>
+        `;
+    });
+}
 
 window.deleteFornecedor = (id) => {
             showConfirmationModal("Tem certeza que deseja excluir este fornecedor?", async () => {
@@ -1313,33 +1894,51 @@ window.deleteFornecedor = (id) => {
             });
         }; // <--- FECHA AQUI O DELETE
 
+
+// Função auxiliar para abrir anexos de fornecedor pelo ID
+window.openSupplierAttachments = (id) => {
+    // Como esta função está dentro do module, ela consegue ler 'state'
+    const f = state.fornecedores.find(x => x.id === id);
+    if (f && f.urlAnexos && f.urlAnexos.length > 0) {
+        window.openAttachmentsModal(f.urlAnexos, null);
+    } else {
+        // Caso algo dê errado ou a lista esteja vazia
+        showNotification("Nenhum anexo encontrado para este fornecedor.", "error");
+    }
+};
+
         // AGORA INICIA O EDITAR (FORA DO DELETE)
         window.editFornecedor = (id) => {
-            // 1. Acha o fornecedor na lista local
-            const fData = state.fornecedores.find(x => x.id === id);
-            if (!fData) return;
+    const fData = state.fornecedores.find(x => x.id === id);
+    if (!fData) return;
 
-            // 2. Pega o formulário
-            const form = document.getElementById('form-fornecedor');
-            
-            // 3. Preenche os campos
-            form.nome.value = fData.nome || '';
-            form.cnpj.value = fData.cnpj || '';
-            form.segmento.value = fData.segmento || '';
-            form.email.value = fData.email || '';
-            form.telefone.value = fData.telefone || '';
-            form.endereco.value = fData.endereco || '';
+    const form = document.getElementById('form-fornecedor');
+    
+    // ... (preenche campos de texto normais: nome, cnpj, etc) ...
+    form.nome.value = fData.nome || '';
+    form.cnpj.value = fData.cnpj || '';
+    form.segmento.value = fData.segmento || '';
+    form.email.value = fData.email || '';
+    form.telefone.value = fData.telefone || '';
+    form.endereco.value = fData.endereco || '';
 
-            // 4. Define o ID no dataset para sabermos que é uma edição
-            form.dataset.id = id;
+    // --- LÓGICA DE ANEXOS ---
+    const btnAnexos = document.getElementById('btn-ver-anexos-fornecedor');
+    if (fData.urlAnexos && fData.urlAnexos.length > 0) {
+        btnAnexos.classList.remove('hidden');
+        btnAnexos.textContent = `Ver Documentos (${fData.urlAnexos.length})`;
+        btnAnexos.onclick = () => window.openAttachmentsModal(fData.urlAnexos, 'modal-fornecedor');
+    } else {
+        btnAnexos.classList.add('hidden');
+    }
+    // ------------------------
 
-            // 5. Muda o título do modal
-            const titleEl = document.querySelector('#modal-fornecedor h3');
-            if(titleEl) titleEl.textContent = "Editar Fornecedor";
+    form.dataset.id = id;
+    const titleEl = document.querySelector('#modal-fornecedor h3');
+    if(titleEl) titleEl.textContent = "Editar Fornecedor";
 
-            // 6. Abre o modal
-            document.getElementById('modal-fornecedor').classList.remove('hidden');
-        };
+    document.getElementById('modal-fornecedor').classList.remove('hidden');
+};
 
         // NOVO: Listener para Upload de NF e Dados Financeiros
             document.getElementById('form-nf-upload').addEventListener('submit', async e => {
@@ -1450,154 +2049,147 @@ window.deleteFornecedor = (id) => {
 
 
         window.openGroupDetails = (idOrRN) => {
-            lastGroupIdForReturn = idOrRN; // Armazena o ID para retorno
+    lastGroupIdForReturn = idOrRN; 
 
-            let items;
-            const isRnFormat = idOrRN.length < 10 || idOrRN === 'AGRUPAMENTO_PENDENTE';
-            let isPendingGroup = false;
+    let items;
+    const isRnFormat = idOrRN.length < 10 || idOrRN === 'AGRUPAMENTO_PENDENTE';
+    let isPendingGroup = false;
 
-            if (idOrRN === 'AGRUPAMENTO_PENDENTE') {
-                 // É o grupo temporário de pedidos sem RN
-                 items = state.pedidos.filter(p => !p.numRN && p.status === 'a-abrir-rn');
-                 isPendingGroup = true;
+    if (idOrRN === 'AGRUPAMENTO_PENDENTE') {
+         items = state.pedidos.filter(p => !p.numRN && p.status === 'a-abrir-rn');
+         isPendingGroup = true;
+    } else if (isRnFormat && idOrRN.length < 10) {
+         items = state.pedidos.filter(p => p.numRN === idOrRN);
+    } else {
+         const item = state.pedidos.find(p => p.id === idOrRN);
+         if (item) items = [item];
+         else return;
+    }
+    
+    if (items.length === 0) return;
+    
+    const first = items[0];
+    const perfil = currentUserProfile.perfil || "Solicitante";
+    const isAquisicoes = perfil === 'Aquisicoes' || perfil === 'Admin';
+    
+    // --- CORREÇÃO: POPULAR O SELECT DE STATUS DINAMICAMENTE ---
+    const statusSelect = document.getElementById('group-status-select');
+    statusSelect.innerHTML = ''; // Limpa opções antigas
+    Object.entries(STATUS_MAP).forEach(([key, config]) => {
+        // Adiciona todas as opções do mapa global
+        statusSelect.innerHTML += `<option value="${key}">${config.text}</option>`;
+    });
+    // Tenta selecionar o status atual do grupo (baseado no primeiro item ou no status majoritário)
+    statusSelect.value = first.status;
+    // -----------------------------------------------------------
 
-            } else if (isRnFormat && idOrRN.length < 10) {
-                 // Caso seja um RN (agrupamento já existente)
-                 items = state.pedidos.filter(p => p.numRN === idOrRN);
-            } else {
-                 // É o ID de um item individual (ID de um pedido sem RN)
-                 const item = state.pedidos.find(p => p.id === idOrRN);
-                 if (item) items = [item];
-                 else return;
-            }
-            
-            if (items.length === 0) return;
-            
-            const first = items[0];
-            const perfil = currentUserProfile.perfil || "Solicitante";
-            const isAquisicoes = perfil === 'Aquisicoes' || perfil === 'Admin';
-            
-            // --- UI FIELDS ---
-            const rnInput = document.getElementById('group-rn-edit');
-            const ocInput = document.getElementById('group-oc-edit');
-            const dateInput = document.getElementById('group-date-edit');
-            const previsaoInput = document.getElementById('group-previsao-edit'); // NOVO
-            const segmentoInput = document.getElementById('group-segmento-edit'); // NOVO
-            const fornecedorInput = document.getElementById('group-fornecedor-edit'); // NOVO
-            const modalidadeSelect = document.getElementById('group-modalidade-select'); // NOVO
-            const grupoSelect = document.getElementById('group-grupo-select'); // NOVO
+    // --- UI FIELDS ---
+    const rnInput = document.getElementById('group-rn-edit');
+    const ocInput = document.getElementById('group-oc-edit');
+    const dateInput = document.getElementById('group-date-edit');
+    const previsaoInput = document.getElementById('group-previsao-edit');
+    const segmentoInput = document.getElementById('group-segmento-edit');
+    const fornecedorInput = document.getElementById('group-fornecedor-edit');
+    const modalidadeSelect = document.getElementById('group-modalidade-select');
+    const grupoSelect = document.getElementById('group-grupo-select');
 
+    const btnSave = document.getElementById('btn-save-rn-data');
+    const batchContainer = document.getElementById('group-batch-status-container');
+    const tbody = document.getElementById('group-items-body');
+    
+    tbody.innerHTML = '';
+    
+    rnInput.value = first.numRN || '';
+    rnInput.dataset.original = first.numRN || '';
+    rnInput.disabled = !isAquisicoes; 
+    ocInput.value = first.numOC || '';
+    ocInput.disabled = !isAquisicoes; 
+    
+    if(first.dataAberturaRN) {
+         try {
+              const d = first.dataAberturaRN.toDate ? first.dataAberturaRN.toDate() : new Date(first.dataAberturaRN);
+              if(!isNaN(d)) dateInput.value = d.toISOString().split('T')[0];
+         } catch(e){ dateInput.value = ''; }
+    } else dateInput.value = '';
+    dateInput.disabled = !isAquisicoes;
 
-            const btnSave = document.getElementById('btn-save-rn-data');
-            const batchContainer = document.getElementById('group-batch-status-container');
-            const tbody = document.getElementById('group-items-body');
-            
-            // Limpa o tbody
-            tbody.innerHTML = '';
-            
-            // Configuração dos campos de RN/OC/Datas
-            rnInput.value = first.numRN || '';
-            rnInput.dataset.original = first.numRN || '';
-            rnInput.disabled = !isAquisicoes; 
-            ocInput.value = first.numOC || '';
-            ocInput.disabled = !isAquisicoes; 
-            
-            if(first.dataAberturaRN) {
-                 try {
-                      const d = first.dataAberturaRN.toDate ? first.dataAberturaRN.toDate() : new Date(first.dataAberturaRN);
-                      if(!isNaN(d)) dateInput.value = d.toISOString().split('T')[0];
-                 } catch(e){ dateInput.value = ''; }
-            } else dateInput.value = '';
-            dateInput.disabled = !isAquisicoes;
+    previsaoInput.value = first.dataPrevisao || '';
+    previsaoInput.disabled = !isAquisicoes;
+    
+    if (isAquisicoes) {
+        fornecedorInput.value = first.fornecedor || '';
+        segmentoInput.value = first.segmento || '';
 
-            // NOVO: Previsão
-            previsaoInput.value = first.dataPrevisao || '';
-            previsaoInput.disabled = !isAquisicoes;
-            
-            // Configuração dos campos suplementares (Modalidade, Grupo, Fornecedor, Segmento)
-            if (isAquisicoes) {
-                // Preenche o Fornecedor, Modalidade e Grupo (Usando os dados do primeiro item)
-                fornecedorInput.value = first.fornecedor || '';
-                segmentoInput.value = first.segmento || '';
+        modalidadeSelect.innerHTML = state.modalidadesList.map(m => `<option value="${m}" ${m === first.modalidade ? 'selected' : ''}>${m}</option>`).join('');
+        
+        grupoSelect.innerHTML = state.gruposDeCompra.map(g => `<option value="${g}" ${g === first.grupoDeCompra ? 'selected' : ''}>${g}</option>`).join('');
 
-                modalidadeSelect.innerHTML = state.modalidadesList.map(m => `<option value="${m}" ${m === first.modalidade ? 'selected' : ''}>${m}</option>`).join('');
-                
-                grupoSelect.innerHTML = state.gruposDeCompra.map(g => `<option value="${g}" ${g === first.grupoDeCompra ? 'selected' : ''}>${g}</option>`).join('');
+        if(btnSave) {
+            btnSave.classList.remove('hidden');
+            btnSave.textContent = "Salvar Dados de Aquisição";
+        }
+        if(batchContainer) batchContainer.classList.remove('hidden');
 
-                // Habilita/Exibe botões de aquisição
-                if(btnSave) {
-                    btnSave.classList.remove('hidden');
-                    btnSave.textContent = "Salvar Dados de Aquisição";
-                }
-                if(batchContainer) batchContainer.classList.remove('hidden');
+        const btnFichaCot = document.getElementById('btn-group-ficha-cotacao');
+        if(btnFichaCot) {
+             const targetForFicha = first.numRN || items.map(i => i.id).join(',');
+             const isGroupFicha = !!first.numRN;
+             
+             btnFichaCot.onclick = () => window.openCotacaoModal(targetForFicha, isGroupFicha);
+             btnFichaCot.classList.remove('hidden');
+        }
 
-                // Atribuição do evento ao botão de ficha (AQUI)
-                const btnFichaCot = document.getElementById('btn-group-ficha-cotacao');
-                if(btnFichaCot) {
-                     // Passa a RN se existir, senão passa os IDs dos itens atuais
-                     const targetForFicha = first.numRN || items.map(i => i.id).join(',');
-                     const isGroupFicha = !!first.numRN;
-                     
-                     btnFichaCot.onclick = () => window.openCotacaoModal(targetForFicha, isGroupFicha);
-                     btnFichaCot.classList.remove('hidden');
-                }
+    } else {
+         if(btnSave) btnSave.classList.add('hidden');
+         if(batchContainer) batchContainer.classList.add('hidden');
+         const btnFichaCot = document.getElementById('btn-group-ficha-cotacao');
+         if(btnFichaCot) btnFichaCot.classList.add('hidden');
+    }
+    
+    let total = 0;
+    const unitValueEditable = isAquisicoes ? '' : 'readonly disabled';
+    
+    items.forEach(p => {
+        total += parseFloat(p.valorTotal||0);
+        
+        const currentUnitValue = parseFloat(p.valorUnitario || 0).toFixed(2);
+        
+        const unlinkBtn = (isAquisicoes && p.numRN) ? 
+            `<button onclick="window.removeItemFromGroup('${p.id}')" class="text-red-600 hover:text-red-800 text-xs" title="Desvincular da RN">
+                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" /></svg>
+             </button>` : '';
+        
+        const tr = document.createElement('tr');
+        tr.className = 'border-b border-gray-100 group-item-row';
+        tr.dataset.id = p.id;
+        tr.dataset.quantity = p.quantidade;
+        tr.dataset.unitvalue = currentUnitValue;
+        tr.dataset.totalvalue = p.valorTotal;
 
-            } else {
-                 // Esconde os campos de edição e botões para Solicitante/Recebedor
-                 if(btnSave) btnSave.classList.add('hidden');
-                 if(batchContainer) batchContainer.classList.add('hidden');
-                 // Esconde botão de ficha se não for aquisições
-                 const btnFichaCot = document.getElementById('btn-group-ficha-cotacao');
-                 if(btnFichaCot) btnFichaCot.classList.add('hidden');
-            }
-            
-            // Preenchimento da tabela de itens (com campos editáveis)
-            let total = 0;
-            const unitValueEditable = isAquisicoes ? '' : 'readonly disabled';
-            
-            items.forEach(p => {
-                total += parseFloat(p.valorTotal||0);
-                
-                const currentUnitValue = parseFloat(p.valorUnitario || 0).toFixed(2);
-                
-                // Botão Desvincular apenas para aquisições E se já houver RN
-                const unlinkBtn = (isAquisicoes && p.numRN) ? 
-                    `<button onclick="window.removeItemFromGroup('${p.id}')" class="text-red-600 hover:text-red-800 text-xs" title="Desvincular da RN">
-                        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" /></svg>
-                     </button>` : '';
-                
-                // Adicionado data attributes para facilitar o recálculo local
-                const tr = document.createElement('tr');
-                tr.className = 'border-b border-gray-100 group-item-row';
-                tr.dataset.id = p.id;
-                tr.dataset.quantity = p.quantidade;
-                tr.dataset.unitvalue = currentUnitValue;
-                tr.dataset.totalvalue = p.valorTotal;
-
-                tr.innerHTML = `
-                    <td class="py-2 px-4 text-sm text-gray-700">
-                        <div class="font-medium">${p.nomeProduto}</div>
-                        <div class="text-xs text-gray-500">${p.unidade} | CR: ${p.cr || '-'}</div>
-                    </td>
-                    <td class="py-2 px-4 text-sm text-gray-700">${p.projeto || '-'}</td>
-                    <td class="py-2 px-4 text-sm text-right font-medium">
-                        <input type="number" step="0.01" value="${currentUnitValue}" 
-                               oninput="window.recalculateItemTotal('${p.id}', this)"
-                               class="w-24 text-right rounded-md border-gray-300 shadow-sm p-1 border ${unitValueEditable ? 'bg-gray-100' : 'bg-white'}"
-                               ${unitValueEditable}>
-                    </td>
-                    <td class="py-2 px-4 text-sm text-right font-medium text-primary-700 item-total-display">R$ ${parseFloat(p.valorTotal).toFixed(2)}</td>
-                    <td class="py-2 px-4 text-center flex justify-center gap-2 items-center">
-                         <button onclick="window.openPedidoModal('${p.id}', true)" class="text-blue-600 hover:underline text-xs">Ver Detalhes</button>
-                         ${unlinkBtn}
-                    </td>
-                `;
-                tbody.appendChild(tr);
-            });
-            
-            document.getElementById('group-total-display').textContent = `R$ ${total.toFixed(2)}`;
-            document.getElementById('modal-group').classList.remove('hidden');
-        };
+        tr.innerHTML = `
+            <td class="py-2 px-4 text-sm text-gray-700">
+                <div class="font-medium">${p.nomeProduto}</div>
+                <div class="text-xs text-gray-500">${p.unidade} | CR: ${p.cr || '-'}</div>
+            </td>
+            <td class="py-2 px-4 text-sm text-gray-700">${p.projeto || '-'}</td>
+            <td class="py-2 px-4 text-sm text-right font-medium">
+                <input type="number" step="0.01" value="${currentUnitValue}" 
+                       oninput="window.recalculateItemTotal('${p.id}', this)"
+                       class="w-24 text-right rounded-md border-gray-300 shadow-sm p-1 border ${unitValueEditable ? 'bg-gray-100' : 'bg-white'}"
+                       ${unitValueEditable}>
+            </td>
+            <td class="py-2 px-4 text-sm text-right font-medium text-primary-700 item-total-display">R$ ${parseFloat(p.valorTotal).toFixed(2)}</td>
+            <td class="py-2 px-4 text-center flex justify-center gap-2 items-center">
+                 <button onclick="window.openPedidoModal('${p.id}', true)" class="text-blue-600 hover:underline text-xs">Ver Detalhes</button>
+                 ${unlinkBtn}
+            </td>
+        `;
+        tbody.appendChild(tr);
+    });
+    
+    document.getElementById('group-total-display').textContent = `R$ ${total.toFixed(2)}`;
+    document.getElementById('modal-group').classList.remove('hidden');
+};
         
         window.closeGroupModal = () => document.getElementById('modal-group').classList.add('hidden');
 
@@ -1928,6 +2520,24 @@ window.deleteFornecedor = (id) => {
                  if(!document.getElementById('fornecedores').classList.contains('hidden')) renderFornecedoresPage();
             });
         }
+
+let unsubscribeFuncionarios = null;
+
+async function fetchFuncionarios() {
+    if (unsubscribeFuncionarios) unsubscribeFuncionarios();
+    // Ordena por nome para facilitar
+    const q = query(collection(db, `artifacts/${appId}/public/data/funcionarios`), orderBy('nome'));
+    
+    unsubscribeFuncionarios = onSnapshot(q, s => {
+        state.funcionarios = [];
+        s.forEach(d => state.funcionarios.push({id: d.id, ...d.data()}));
+        // Se o modal estiver aberto, atualiza a lista em tempo real
+        if (!document.getElementById('modal-funcionarios').classList.contains('hidden')) {
+            renderFuncionariosTable();
+        }
+    });
+}
+
         async function fetchUnidades() {
              if (unsubscribeUnidades) unsubscribeUnidades();
              unsubscribeUnidades = onSnapshot(collection(db, `artifacts/${appId}/public/data/unidades`), s => {
@@ -2314,6 +2924,15 @@ window.deleteFornecedor = (id) => {
                     renderPedidosTable(state.pedidos);
                 });
              }
+
+             // --- CÓDIGO NOVO PARA O FORNECEDOR ---
+const filterFornSpecific = document.getElementById('filter-fornecedor-specific');
+if (filterFornSpecific) {
+    filterFornSpecific.addEventListener('input', e => {
+        state.filtros.fornecedor = e.target.value;
+        renderPedidosTable(state.pedidos);
+    });
+}
              
              // Filter NF change (NOVO)
              const filterNF = document.getElementById('filter-nf-status');
@@ -2326,11 +2945,18 @@ window.deleteFornecedor = (id) => {
              document.getElementById('search-fornecedor-segmento')?.addEventListener('input', renderFornecedoresPage);
              
              // NOVO: Fornecedor Save (Abre Modal)
-             document.getElementById('btn-novo-fornecedor')?.addEventListener('click', () => {
+document.getElementById('btn-novo-fornecedor')?.addEventListener('click', () => {
     const form = document.getElementById('form-fornecedor');
-    form.reset();
-    form.dataset.id = ""; // Limpa o ID para indicar CRIAÇÃO
-    document.querySelector('#modal-fornecedor h3').textContent = "Novo Fornecedor"; // Reseta o título
+    form.reset(); // Limpa os textos e o input de arquivo
+    form.dataset.id = ""; // Indica que é um novo cadastro
+    
+    // CORREÇÃO: Garante que o botão de ver anexos antigos esteja ESCONDIDO
+    const btnAnexos = document.getElementById('btn-ver-anexos-fornecedor');
+    if (btnAnexos) {
+        btnAnexos.classList.add('hidden');
+    }
+
+    document.querySelector('#modal-fornecedor h3').textContent = "Novo Fornecedor"; 
     document.getElementById('modal-fornecedor').classList.remove('hidden');
 });
  
@@ -2417,48 +3043,81 @@ window.deleteFornecedor = (id) => {
                  finally{ btn.disabled=false; btn.textContent="Salvar"; }
              });
 
-             // NOVO: Save Serviço Form
-             document.getElementById('form-servico').addEventListener('submit', async e => {
-                 e.preventDefault();
-                 const btn = e.target.querySelector('button[type="submit"]');
-                 const f = e.target;
-                 
-                 btn.disabled = true; btn.textContent = "...";
-                 
-                 try {
-                     const data = {
-                          modalidade: 'Serviço', // Fixo
-                          unidade: f.unidade.value,
-                          cr: f.cr.value,
-                          projeto: f.projeto.value,
-                          nomeProduto: f.descricao.value, // Mapeia Descrição para NomeProduto
-                          dataPrevisao: f.dataPrevisao.value,
-                          fornecedor: f.fornecedor.value,
-                          
-                          // Default/Hidden
-                          status: 'enviado-aquisicao', // NOVO STATUS PADRÃO
-                          nomeDemandante: currentUserProfile.nome,
-                          solicitanteId: currentUser.uid,
-                          solicitanteEmail: currentUser.email,
-                          solicitanteNome: currentUserProfile.nome,
-                          dataSolicitacao: Timestamp.now(),
-                          grupoDeCompra: 'Serviços', // Default group
-                          quantidade: 1, // Default
-                          valorUnitario: 0, // Default 
-                          valorTotal: 0 // Default
-                     };
-                     
-                     if(f.fileOrc.files[0]) {
-                          const r = ref(storage, `artifacts/${appId}/docs/${Date.now()}_orc_servico`);
-                          await uploadBytes(r, f.fileOrc.files[0]); data.urlOrcamento = await getDownloadURL(r);
-                     }
-                     
-                     await addDoc(collection(db, `artifacts/${appId}/public/data/pedidos`), data);
-                     showNotification("Serviço solicitado!", "success");
-                     window.closeServicoModal();
-                 } catch(err) { console.error(err); showNotification("Erro ao solicitar serviço.", "error"); }
-                 finally { btn.disabled = false; btn.textContent = "Solicitar Serviço"; }
-             });
+window.toggleSupplierDetails = (id) => {
+    const el = document.getElementById(`details-${id}`);
+    const icon = document.getElementById(`icon-${id}`);
+    
+    if (el.classList.contains('hidden')) {
+        el.classList.remove('hidden');
+        icon.style.transform = 'rotate(180deg)';
+    } else {
+        el.classList.add('hidden');
+        icon.style.transform = 'rotate(0deg)';
+    }
+};
+
+             // NOVO: Save Serviço Form (Atualizado para Edição)
+document.getElementById('form-servico').addEventListener('submit', async e => {
+    e.preventDefault();
+    const f = e.target;
+    const btn = f.querySelector('button[type="submit"]');
+    const docId = f.dataset.id; 
+
+    btn.disabled = true; btn.textContent = "Processando...";
+    
+    try {
+        const data = {
+            modalidade: 'Serviço',
+            unidade: f.unidade.value,
+            status: f.status.value, // <--- SALVA O STATUS SELECIONADO
+            cr: f.cr.value,
+            projeto: f.projeto.value,
+            nomeProduto: f.descricao.value, 
+            dataPrevisao: f.dataPrevisao.value,
+            fornecedor: f.fornecedor.value,
+            funcionario: f.funcionario.value // <--- SALVA O FUNCIONÁRIO
+        };
+        
+        if (!docId) {
+            // Dados fixos na criação
+            data.nomeDemandante = currentUserProfile.nome;
+            data.solicitanteId = currentUser.uid;
+            data.solicitanteEmail = currentUser.email;
+            data.solicitanteNome = currentUserProfile.nome;
+            data.dataSolicitacao = Timestamp.now();
+            data.grupoDeCompra = 'Serviços';
+            data.quantidade = 1; 
+            data.valorUnitario = 0; 
+            data.valorTotal = 0;
+            // Se o usuário não tiver permissão para mudar status na criação, força o padrão:
+            if (currentUserProfile.perfil === 'Solicitante') data.status = 'enviado-aquisicao';
+        }
+        
+        if(f.fileOrc.files[0]) {
+            const r = ref(storage, `artifacts/${appId}/docs/${Date.now()}_orc_servico`);
+            await uploadBytes(r, f.fileOrc.files[0]); 
+            data.urlOrcamento = await getDownloadURL(r);
+        }
+        
+        if (docId) {
+            await updateDoc(doc(db, `artifacts/${appId}/public/data/pedidos`, docId), data);
+            showNotification("Serviço atualizado!", "success");
+        } else {
+            await addDoc(collection(db, `artifacts/${appId}/public/data/pedidos`), data);
+            showNotification("Serviço solicitado!", "success");
+        }
+
+        window.closeServicoModal();
+    } catch(err) { 
+        console.error(err); 
+        showNotification("Erro ao salvar.", "error"); 
+    } finally { 
+        btn.disabled = false; 
+        btn.textContent = docId ? "Atualizar Serviço" : "Solicitar Serviço"; 
+    }
+});
+
+
              
              // NOVO: Save Unidade Form
              document.getElementById('btn-nova-unidade').addEventListener('click', () => window.openUnidadeModal(null));
@@ -2501,35 +3160,70 @@ window.deleteFornecedor = (id) => {
 document.getElementById('form-fornecedor').addEventListener('submit', async e => {
     e.preventDefault();
     const f = e.target;
-    const docId = f.dataset.id; // Verifica se há um ID salvo (Edição)
-    
-    const data = {
-        nome: f.nome.value, 
-        cnpj: f.cnpj.value, 
-        segmento: f.segmento.value, 
-        email: f.email.value, 
-        telefone: f.telefone.value, 
-        endereco: f.endereco.value
-    };
+    const docId = f.dataset.id;
+    const btn = f.querySelector('button[type="submit"]'); // Pega o botão para feedback
 
+    btn.disabled = true; btn.textContent = "Salvando...";
+
+    // 1. Upload de Arquivos (Se houver)
+    let uploadedUrls = [];
+    const files = f.fileAttachments.files;
+    
+    // Imports necessários no topo do arquivo (já devem existir): ref, uploadBytes, getDownloadURL, storage, appId
+    // Mas como estamos dentro do type="module", usamos as variáveis globais importadas.
+    
     try {
+        if (files.length > 0) {
+            // Import dinâmico das funções do Storage se não estiverem no escopo (assumindo que já estão no topo do script)
+            // Se der erro de referência, certifique-se que 'ref', 'uploadBytes', 'getDownloadURL' estão importados no topo.
+            
+            for(let i=0; i < files.length; i++) {
+                const file = files[i];
+                // Cria uma pasta 'suppliers' no storage
+                const storageRef = ref(storage, `artifacts/${appId}/suppliers/${Date.now()}_${file.name}`);
+                await uploadBytes(storageRef, file);
+                const url = await getDownloadURL(storageRef);
+                uploadedUrls.push(url);
+            }
+        }
+
+        // 2. Preparar dados
+        const data = {
+            nome: f.nome.value, 
+            cnpj: f.cnpj.value, 
+            segmento: f.segmento.value, 
+            email: f.email.value, 
+            telefone: f.telefone.value, 
+            endereco: f.endereco.value
+        };
+
+        // 3. Mesclar Anexos (Novo + Existente)
         if (docId) {
-            // --- MODO EDIÇÃO ---
+            // Se for edição, precisamos preservar os antigos se não quiser sobrescrever
+            const existingSupplier = state.fornecedores.find(x => x.id === docId);
+            const oldUrls = existingSupplier && existingSupplier.urlAnexos ? existingSupplier.urlAnexos : [];
+            // Adiciona apenas se houver novos uploads. Se não houver upload, mantém os antigos.
+            // Se quiser permitir apagar, a lógica seria mais complexa, aqui estamos apenas ADICIONANDO.
+            data.urlAnexos = [...oldUrls, ...uploadedUrls];
+            
             await updateDoc(doc(db, `artifacts/${appId}/public/data/fornecedores`, docId), data);
-            showNotification("Fornecedor atualizado!", "success");
+            showNotification("Fornecedor atualizado com sucesso!", "success");
         } else {
-            // --- MODO CRIAÇÃO ---
+            // Criação
+            data.urlAnexos = uploadedUrls;
             await addDoc(collection(db, `artifacts/${appId}/public/data/fornecedores`), data);
-            showNotification("Fornecedor cadastrado!", "success");
+            showNotification("Fornecedor cadastrado com sucesso!", "success");
         }
         
         f.reset(); 
-        f.dataset.id = ""; // Limpa o ID após salvar
+        f.dataset.id = "";
         document.getElementById('modal-fornecedor').classList.add('hidden');
         
     } catch(err){ 
         console.error("ERRO AO SALVAR FORNECEDOR:", err);
-        showNotification("Erro ao salvar: " + (err.message || 'Verifique o console.'), "error"); 
+        showNotification("Erro ao salvar: " + err.message, "error"); 
+    } finally {
+        btn.disabled = false; btn.textContent = "Salvar";
     }
 });
 
@@ -2635,7 +3329,22 @@ document.getElementById('form-fornecedor').addEventListener('submit', async e =>
              });
 
              // Bulk Group
-             document.getElementById('btn-bulk-rn').addEventListener('click', () => document.getElementById('modal-agrupar').classList.remove('hidden'));
+             // Bulk Group - Abrir Modal e Preencher Status
+document.getElementById('btn-bulk-rn').addEventListener('click', () => {
+    // 1. Popula o select de status do modal de agrupamento
+    const selectAgrupar = document.querySelector('#form-agrupar select[name="status"]');
+    if (selectAgrupar) {
+        selectAgrupar.innerHTML = '';
+        Object.entries(STATUS_MAP).forEach(([key, config]) => {
+            selectAgrupar.innerHTML += `<option value="${key}">${config.text}</option>`;
+        });
+        // Define um padrão sensato (ex: em-cotacao)
+        selectAgrupar.value = 'em-cotacao';
+    }
+
+    // 2. Abre o modal
+    document.getElementById('modal-agrupar').classList.remove('hidden');
+});
              document.getElementById('form-agrupar').addEventListener('submit', async e => {
                  e.preventDefault();
                  const f = e.target;
@@ -2880,24 +3589,29 @@ document.getElementById('form-fornecedor').addEventListener('submit', async e =>
                 </div>
     
                 <!-- Filtros -->
-                <div class="bg-white p-4 rounded-lg shadow-sm border border-gray-200 mb-6 grid grid-cols-1 md:grid-cols-4 gap-4">
-                    <div>
-                        <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Buscar RN/OC</label>
-                        <input type="text" id="filter-search" placeholder="RN ou OC..." class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-gray-50">
-                    </div>
-                    <div>
-                        <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Unidade</label>
-                        <select id="filter-unidade" class="block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm rounded-md border bg-gray-50"></select>
-                    </div>
-                    <div>
-                        <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Modalidade</label>
-                        <select id="filter-modalidade" class="block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm rounded-md border bg-gray-50"></select>
-                    </div>
-                    <div>
-                        <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Status</label>
-                        <select id="filter-status" class="block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm rounded-md border bg-gray-50"></select>
-                    </div>
-                </div>
+                <div class="bg-white p-4 rounded-lg shadow-sm border border-gray-200 mb-6 grid grid-cols-1 md:grid-cols-5 gap-4">
+    <div>
+        <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Buscar RN/OC</label>
+        <input type="text" id="filter-search" placeholder="RN ou OC..." class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-gray-50">
+    </div>
+    
+    <div>
+        <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Fornecedor</label>
+        <input type="text" id="filter-fornecedor-specific" placeholder="Nome..." class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-gray-50">
+    </div>
+    <div>
+        <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Unidade</label>
+        <select id="filter-unidade" class="block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm rounded-md border bg-gray-50"></select>
+    </div>
+    <div>
+        <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Modalidade</label>
+        <select id="filter-modalidade" class="block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm rounded-md border bg-gray-50"></select>
+    </div>
+    <div>
+        <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Status</label>
+        <select id="filter-status" class="block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm rounded-md border bg-gray-50"></select>
+    </div>
+</div>
     
                 <!-- Tabela -->
                 <div class="bg-white shadow-sm border border-gray-200 rounded-lg overflow-hidden">
@@ -2922,33 +3636,61 @@ document.getElementById('form-fornecedor').addEventListener('submit', async e =>
     
             <!-- SERVIÇOS PAGE (NOVO) -->
             <div id="servicos" class="page-content hidden w-full">
-                <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
-                    <h2 id="servicos-title" class="text-2xl font-bold text-gray-900">Gestão de Serviços</h2>
-                    <button onclick="openServicoModal()" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700 focus:outline-none">
-                        <svg class="-ml-1 mr-2 h-5 w-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" /></svg>
-                        Solicitar Serviço
-                    </button>
-                </div>
-    
-                <div class="bg-white shadow-sm border border-gray-200 rounded-lg overflow-hidden">
-                    <div class="overflow-x-auto">
-                        <table class="min-w-full divide-y divide-gray-200">
-                            <thead class="bg-gray-50">
-                                <tr>
-                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Unidade</th>
-                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Projeto / Serviço</th>
-                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">CR</th>
-                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Fornecedor</th>
-                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Data Prevista</th>
-                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                                    <th class="px-4 py-3"></th>
-                                </tr>
-                            </thead>
-                            <tbody id="tabela-servicos-body" class="bg-white divide-y divide-gray-200"></tbody>
-                        </table>
-                    </div>
-                </div>
-            </div>
+    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
+        <h2 id="servicos-title" class="text-2xl font-bold text-gray-900">Gestão de Serviços</h2>
+        <div class="flex gap-2">
+            <button onclick="openFuncionariosModal()" class="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 focus:outline-none">
+                <svg class="mr-2 -ml-1 h-5 w-5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" /></svg>
+                Funcionários (FAP/ASO)
+            </button>
+            <button onclick="openServicoModal()" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700 focus:outline-none">
+                <svg class="-ml-1 mr-2 h-5 w-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" /></svg>
+                Solicitar Serviço
+            </button>
+        </div>
+    </div>
+
+    <div class="bg-white p-4 rounded-lg shadow-sm border border-gray-200 mb-6 grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div>
+            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Unidade</label>
+            <select id="filter-serv-unidade" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-gray-50" onchange="renderServicosPage()">
+                <option value="">Todas</option>
+            </select>
+        </div>
+        <div>
+            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Fornecedor</label>
+            <input type="text" id="filter-serv-fornecedor" placeholder="Nome do fornecedor..." class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-gray-50" oninput="renderServicosPage()">
+        </div>
+        <div>
+            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Data Prevista</label>
+            <input type="date" id="filter-serv-data" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-gray-50" onchange="renderServicosPage()">
+        </div>
+        <div>
+            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Status</label>
+            <select id="filter-serv-status" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-gray-50" onchange="renderServicosPage()">
+                <option value="">Todos</option>
+                </select>
+        </div>
+    </div>
+    <div class="bg-white shadow-sm border border-gray-200 rounded-lg overflow-hidden">
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Unidade</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Projeto / Serviço</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">CR</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Fornecedor</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Data Prevista</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                        <th class="px-4 py-3"></th>
+                    </tr>
+                </thead>
+                <tbody id="tabela-servicos-body" class="bg-white divide-y divide-gray-200"></tbody>
+            </table>
+        </div>
+    </div>
+</div>
     
             <!-- GESTAO DE NF PAGE (NOVO) -->
             <div id="gestao-nf" class="page-content hidden w-full">
@@ -3269,59 +4011,80 @@ document.getElementById('form-fornecedor').addEventListener('submit', async e =>
         </div>
         
         <!-- Modal Serviço (NOVO) -->
-        <div id="modal-servico" class="relative z-50 hidden">
-            <div class="fixed inset-0 bg-gray-900/75 backdrop-blur-sm transition-opacity"></div>
-            <div class="fixed inset-0 z-10 overflow-y-auto">
-                <div class="flex min-h-full items-center justify-center p-4 text-center sm:p-0">
-                    <div class="relative transform overflow-hidden rounded-lg bg-white text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-2xl">
-                        <form id="form-servico" class="flex flex-col h-full">
-                            <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-                                <h3 class="text-lg font-bold leading-6 text-gray-900 mb-4 flex items-center gap-2">
-                                    <svg class="h-6 w-6 text-primary-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-                                    Nova Solicitação de Serviço
-                                </h3>
+<div id="modal-servico" class="relative z-50 hidden">
+    <div class="fixed inset-0 bg-gray-900/75 backdrop-blur-sm transition-opacity"></div>
+
+    <div class="fixed inset-0 z-10 overflow-y-auto">
+        <div class="flex min-h-full items-center justify-center p-4 text-center sm:p-0">
+            
+            <div class="relative transform overflow-hidden rounded-lg bg-white text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-2xl">
+                
+                <form id="form-servico" class="flex flex-col">
+                    
+                    <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                        <h3 class="text-lg font-bold leading-6 text-gray-900 mb-4 flex items-center gap-2">
+                            <svg class="h-6 w-6 text-primary-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                            Solicitação de Serviço
+                        </h3>
+                        
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Unidade</label>
+                                <select name="unidade" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border"></select>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Status</label>
+                                <select name="status" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-white"></select>
+                            </div>
+
+                            <div>
+                                <label class="block text-xs font-medium text-gray-500 uppercase mb-1">CR</label>
+                                <input name="cr" required class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Projeto</label>
+                                <input name="projeto" required class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border">
+                            </div>
+
+                            <div class="col-span-2">
+                                <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Descrição do Serviço</label>
+                                <textarea name="descricao" required rows="2" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border"></textarea>
+                            </div>
+
+                            <div>
+                                <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Data Prevista Execução</label>
+                                <input name="dataPrevisao" type="date" required class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border" onchange="validateServiceEmployee()">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Fornecedor</label>
+                                <input list="fornecedores-datalist-servico" name="fornecedor" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border" placeholder="Selecione..." onchange="filterEmployeesBySupplier(); validateServiceEmployee()" oninput="filterEmployeesBySupplier()">
+                                <datalist id="fornecedores-datalist-servico"></datalist>
+                            </div>
+
+                            <div class="col-span-2 bg-gray-50 p-3 rounded border border-gray-200">
+                                <label class="block text-xs font-bold text-gray-700 uppercase mb-1">Funcionário Executante (Obrigatório FAP/ASO)</label>
+                                <input list="datalist-funcionarios-servico" name="funcionario" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border mb-2" placeholder="Digite o nome do funcionário..." oninput="validateServiceEmployee()" autocomplete="off">
+                                <datalist id="datalist-funcionarios-servico"></datalist>
                                 
-                                <div class="grid grid-cols-2 gap-4">
-                                    <div>
-                                        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Unidade</label>
-                                        <select name="unidade" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border"></select>
-                                    </div>
-                                    <div>
-                                        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">CR</label>
-                                        <input name="cr" required class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                                    </div>
-                                    <div class="col-span-2">
-                                        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Projeto</label>
-                                        <input name="projeto" required class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                                    </div>
-                                    <div class="col-span-2">
-                                        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Descrição do Serviço</label>
-                                        <textarea name="descricao" required rows="3" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border"></textarea>
-                                    </div>
-                                    <div>
-                                        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Data Prevista Execução</label>
-                                        <input name="dataPrevisao" type="date" required class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                                    </div>
-                                    <div>
-                                        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Fornecedor Sugerido</label>
-                                        <input list="fornecedores-datalist-servico" name="fornecedor" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border" placeholder="Busque ou digite...">
-                                        <datalist id="fornecedores-datalist-servico"></datalist>
-                                    </div>
-                                    <div class="col-span-2">
-                                        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Anexar Orçamento</label>
-                                        <input type="file" name="fileOrc" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100">
-                                    </div>
-                                </div>
+                                <div id="service-employee-alert" class="text-xs hidden"></div>
                             </div>
-                            <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse border-t border-gray-200">
-                                <button type="submit" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-primary-600 text-base font-medium text-white hover:bg-primary-700 focus:outline-none sm:ml-3 sm:w-auto sm:text-sm">Solicitar Serviço</button>
-                                <button type="button" onclick="closeServicoModal()" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">Cancelar</button>
+
+                            <div class="col-span-2">
+                                <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Anexar Orçamento</label>
+                                <input type="file" name="fileOrc" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100">
                             </div>
-                        </form>
+                        </div>
                     </div>
+
+                    <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse border-t border-gray-200">
+                        <button type="submit" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-primary-600 text-base font-medium text-white hover:bg-primary-700 focus:outline-none sm:ml-3 sm:w-auto sm:text-sm">Salvar Serviço</button>
+                        <button type="button" onclick="closeServicoModal()" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">Cancelar</button>
+                    </div>
+                </form>
                 </div>
-            </div>
         </div>
+    </div>
+</div>
         
         <!-- Modal NF Upload (NOVO) -->
         <div id="modal-nf" class="relative z-50 hidden">
@@ -3430,9 +4193,24 @@ document.getElementById('form-fornecedor').addEventListener('submit', async e =>
                             </div>
                         </div>
                         <div>
-                            <label class="block text-sm font-medium text-gray-700">Endereço</label>
-                            <input name="endereco" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                        </div>
+        <label class="block text-sm font-medium text-gray-700">Endereço</label>
+        <input name="endereco" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+    </div>
+
+    <div class="bg-gray-50 p-3 rounded border border-gray-200 mt-2">
+        <label class="block text-xs font-bold text-gray-500 uppercase mb-2">Documentos (Contratos, Certidões, etc)</label>
+        <div class="flex items-center gap-2">
+            <input type="file" name="fileAttachments" multiple class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-primary-600 file:text-white hover:file:bg-primary-700">
+            
+            <button type="button" id="btn-ver-anexos-fornecedor" class="hidden px-3 py-2 border border-blue-300 bg-blue-50 text-blue-600 rounded text-xs font-bold hover:bg-blue-100 whitespace-nowrap">
+                Ver Atuais
+            </button>
+        </div>
+    </div>
+    <div class="flex justify-end gap-2 pt-4">
+        <button type="button" onclick="closeFornecedorModal()" class="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50">Cancelar</button>
+        <button type="submit" class="px-4 py-2 bg-primary-600 text-white rounded-md text-sm font-medium hover:bg-primary-700 shadow-sm">Salvar Fornecedor</button>
+    </div>
                         <div class="flex justify-end gap-2 pt-2">
                              <button type="button" onclick="closeFornecedorModal()" class="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50">Cancelar</button>
                              <button type="submit" class="px-4 py-2 bg-primary-600 text-white rounded-md text-sm font-medium hover:bg-primary-700 shadow-sm">Salvar</button>
@@ -3459,114 +4237,290 @@ document.getElementById('form-fornecedor').addEventListener('submit', async e =>
             </div>
         </div>
     
-    
+<div id="modal-funcionarios" class="relative z-50 hidden">
+    <div class="fixed inset-0 bg-gray-900/75 backdrop-blur-sm transition-opacity"></div>
+    <div class="fixed inset-0 z-10 overflow-y-auto">
+        <div class="flex min-h-full items-center justify-center p-4">
+            <div class="bg-white rounded-lg shadow-xl w-full max-w-4xl p-6">
+                <div class="flex justify-between items-center mb-6 border-b pb-4">
+                    <h3 class="text-xl font-bold text-gray-900">Gestão de Funcionários Terceiros</h3>
+                    <button onclick="document.getElementById('modal-funcionarios').classList.add('hidden')" class="text-gray-400 hover:text-gray-500">
+                        <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+                    </button>
+                </div>
+
+                <div class="bg-gray-100 p-3 rounded-lg border border-gray-200 mb-4 grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <div>
+                        <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Filtrar Nome</label>
+                        <input type="text" id="filter-func-nome" placeholder="Nome..." class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-1.5 border" oninput="renderFuncionariosTable()">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Filtrar Empresa</label>
+                        <input type="text" id="filter-func-empresa" placeholder="Empresa..." class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-1.5 border" oninput="renderFuncionariosTable()">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Situação</label>
+                        <select id="filter-func-validade" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-1.5 border bg-white" onchange="renderFuncionariosTable()">
+                            <option value="">Todos</option>
+                            <option value="validos">Apenas Válidos</option>
+                            <option value="vencidos">Apenas Vencidos</option>
+                        </select>
+                    </div>
+                </div>
+                <form id="form-funcionario" class="bg-gray-50 p-4 rounded-lg border border-gray-200 mb-6">
+                    <div class="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+                        <div class="md:col-span-1">
+                            <label class="block text-xs font-bold text-gray-700 uppercase mb-1">Empresa (Fornecedor)</label>
+                            <input list="datalist-fornecedores-func" name="empresa" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border" placeholder="Buscar..." required>
+                            <datalist id="datalist-fornecedores-func"></datalist>
+                        </div>
+                        <div class="md:col-span-1">
+                            <label class="block text-xs font-bold text-gray-700 uppercase mb-1">Nome Funcionário</label>
+                            <input name="nome" type="text" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border" required>
+                        </div>
+                        <div class="md:col-span-1">
+                            <label class="block text-xs font-bold text-gray-700 uppercase mb-1">Documento</label>
+                            <select name="tipoDoc" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-white">
+                                <option value="FAP">FAP (Validade 60 Dias)</option>
+                                <option value="ASO">ASO (Validade 365 Dias)</option>
+                            </select>
+                        </div>
+                        <div class="md:col-span-1">
+                            <label class="block text-xs font-bold text-gray-700 uppercase mb-1">Data Emissão</label>
+                            <input name="dataEmissao" type="date" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border" required>
+                        </div>
+                        <div class="md:col-span-3">
+                            <label class="block text-xs font-bold text-gray-700 uppercase mb-1">Anexo (PDF/Imagem)</label>
+                            <input type="file" name="fileDoc" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
+                        </div>
+                        <div class="md:col-span-1">
+                            <button type="submit" class="w-full bg-blue-600 text-white px-4 py-2 rounded shadow text-sm font-bold hover:bg-blue-700 h-10">Salvar</button>
+                        </div>
+                    </div>
+                </form>
+
+                <div class="overflow-hidden rounded-lg border border-gray-200">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-100">
+                            <tr>
+                                <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Funcionário / Empresa</th>
+                                <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Documento</th>
+                                <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Emissão</th>
+                                <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Validade</th>
+                                <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                                <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">Ações</th>
+                            </tr>
+                        </thead>
+                        <tbody id="table-funcionarios-body" class="bg-white divide-y divide-gray-200"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+
         <!-- Pedido Modal -->
-        <div id="modal-pedido" class="relative z-50 hidden">
-            <div class="fixed inset-0 bg-gray-900/75 backdrop-blur-sm transition-opacity"></div>
-            <div class="fixed inset-0 z-10 overflow-y-auto">
-                <div class="flex min-h-full items-center justify-center p-4 text-center sm:p-0">
-                    <div class="relative transform overflow-hidden rounded-lg bg-white text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-4xl">
-                        <form id="form-pedido" class="flex flex-col h-full">
-                            <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-                                <div class="flex items-center justify-between mb-4 border-b pb-2">
-                                    <h3 class="text-lg font-bold leading-6 text-gray-900 flex items-center gap-2">
-                                        <svg class="h-6 w-6 text-primary-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-                                        Detalhes da Solicitação
-                                    </h3>
-                                    <button type="button" id="btn-return-group" onclick="returnToGroupModal()" class="hidden text-sm text-gray-500 hover:text-gray-700 flex items-center gap-1">
-                                        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 15l-3-3m0 0l3-3m-3 3h8M3 12a9 9 0 1118 0 9 9 0 01-18 0z" /></svg>
-                                        Voltar para o Grupo
-                                    </button>
+       <div id="modal-pedido" class="relative z-50 hidden">
+    <div class="fixed inset-0 bg-gray-900/75 backdrop-blur-sm transition-opacity"></div>
+    <div class="fixed inset-0 z-10 overflow-y-auto">
+        <div class="flex min-h-full items-center justify-center p-4 text-center sm:p-0">
+            <div class="relative transform overflow-hidden rounded-lg bg-white text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-4xl">
+                
+                <form id="form-pedido" class="flex flex-col h-full">
+                    <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                        
+                        <div class="flex items-center justify-between mb-4 border-b pb-2">
+                            <h3 class="text-lg font-bold leading-6 text-gray-900 flex items-center gap-2">
+                                <svg class="h-6 w-6 text-primary-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                                Detalhes da Solicitação
+                            </h3>
+                            <button type="button" id="btn-return-group" onclick="returnToGroupModal()" class="hidden text-sm text-gray-500 hover:text-gray-700 flex items-center gap-1">
+                                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 15l-3-3m0 0l3-3m-3 3h8M3 12a9 9 0 1118 0 9 9 0 01-18 0z" /></svg>
+                                Voltar para o Grupo
+                            </button>
+                        </div>
+
+                        <div class="grid grid-cols-12 gap-4">
+                            <div class="col-span-12 relative">
+                                <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Buscar Produto (Auto-preenchimento)</label>
+                                <input type="text" id="inp-search" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-gray-50 placeholder-gray-400">
+                                <div id="pedido-results" class="absolute bg-white border border-gray-200 w-full mt-1 max-h-40 overflow-auto z-20 shadow-lg rounded-md"></div>
+                            </div>
+
+                            <div class="col-span-4">
+                                <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Unidade</label>
+                                <select name="unidade" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border"></select>
+                            </div>
+                            <div class="col-span-4">
+                                <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Demandante</label>
+                                <input name="nomeDemandante" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                            </div>
+                            <div class="col-span-2">
+                                <label class="block text-xs font-medium text-gray-500 uppercase mb-1">CR</label>
+                                <input name="cr" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                            </div>
+                            <div class="col-span-2">
+                                <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Projeto</label>
+                                <input name="projeto" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                            </div>
+
+                            <div class="col-span-8">
+                                <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Nome do Produto/Serviço</label>
+                                <input name="nomeProduto" required class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                            </div>
+                            <div class="col-span-4">
+                                <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Variação</label>
+                                <input name="variacao" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                            </div>
+                            <div class="col-span-4">
+                                <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Cód. Produto</label>
+                                <input name="codigoProduto" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                            </div>
+                            <div class="col-span-8"></div>
+
+                            <div class="col-span-8 grid grid-cols-3 gap-4">
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Qtd</label>
+                                    <input type="number" id="inp-qtd" name="quantidade" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
                                 </div>
-                                
-                                <div class="grid grid-cols-12 gap-4">
-                                    <!-- Search -->
-                                    <div class="col-span-12 relative">
-                                        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Buscar Produto (Auto-preenchimento)</label>
-                                        <input type="text" id="inp-search" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-gray-50 placeholder-gray-400">
-                                        <div id="pedido-results" class="absolute bg-white border border-gray-200 w-full mt-1 max-h-40 overflow-auto z-20 shadow-lg rounded-md"></div>
-                                    </div>
-    
-                                    <!-- Basic Info -->
-                                    <div class="col-span-4">
-                                        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Unidade</label>
-                                        <select name="unidade" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border"></select>
-                                    </div>
-                                    <div class="col-span-4">
-                                        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Demandante</label>
-                                        <input name="nomeDemandante" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                                    </div>
-                                    <div class="col-span-2">
-                                        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">CR</label>
-                                        <input name="cr" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                                    </div>
-                                    <div class="col-span-2">
-                                        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Projeto</label>
-                                        <input name="projeto" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                                    </div>
-    
-                                    <!-- Product Info -->
-                                    <div class="col-span-8">
-                                        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Nome do Produto/Serviço</label>
-                                        <input name="nomeProduto" required class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                                    </div>
-                                    
-                                    <div class="col-span-4">
-                                        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Variação</label>
-                                        <input name="variacao" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                                    </div>
-                                    <div class="col-span-4">
-                                        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Cód. Produto</label>
-                                        <input name="codigoProduto" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                                    </div>
-                                    <div class="col-span-8"></div> <!-- Spacer -->
-    
-                                    <!-- Values -->
-                                    <div class="col-span-8 grid grid-cols-3 gap-4">
-                                        <div>
-                                            <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Qtd</label>
-                                            <input type="number" id="inp-qtd" name="quantidade" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                                        </div>
-                                        <div>
-                                            <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Valor Unit.</label>
-                                            <input type="number" step="0.01" id="inp-val" name="valorUnitario" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                                        </div>
-                                        <div class="col-span-3">
-                                            <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Valor Total</label>
-                                            <!-- Campo Valor Total agora tem 100% da largura da coluna 8 -->
-                                            <input type="number" id="inp-tot" name="valorTotal" readonly class="block w-full rounded-md border-gray-300 bg-gray-100 shadow-sm sm:text-sm p-2 border cursor-not-allowed font-bold text-gray-700">
-                                        </div>
-                                    </div>
-    
-                                    <div class="col-span-12">
-                                        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Observações</label>
-                                        <textarea name="descricao" rows="2" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border"></textarea>
-                                    </div>
-                                    
-                                    <!-- Attachments (NOVO CAMPO DE MÚLTIPLOS ARQUIVOS) -->
-                                    <div class="col-span-12 flex items-end gap-4">
-                                        <div class="flex-1">
-                                            <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Anexar Arquivos (Orçamentos, Documentos, etc.)</label>
-                                            <input type="file" name="fileAttachments" multiple class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100">
-                                        </div>
-                                        <!-- Botão de ver anexos (MOSTRA NA EDIÇÃO) -->
-                                         <button type="button" id="btn-ver-anexos" 
-                                                 onclick="
-                                                    const currentId = document.getElementById('form-pedido').dataset.id;
-                                                    const p = state.pedidos.find(x => x.id === currentId); 
-                                                    if(p && p.urlAnexos && p.urlAnexos.length > 0) openAttachmentsModal(p.urlAnexos);
-                                                    else showNotification('Nenhum anexo existente.', 'error');
-                                                 " 
-                                                 class="flex-shrink-0 inline-flex items-center px-3 py-2 border text-sm leading-4 font-medium rounded-md bg-white focus:outline-none" 
-                                                 title="Ver anexos existentes">
-                                                 <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
-                                                 Ver Anexos (0)
-                                         </button>
-                                    </div>
-    
-    
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Valor Unit.</label>
+                                    <input type="number" step="0.01" id="inp-val" name="valorUnitario" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
                                 </div>
+                                <div class="col-span-3">
+                                    <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Valor Total</label>
+                                    <input type="number" id="inp-tot" name="valorTotal" readonly class="block w-full rounded-md border-gray-300 bg-gray-100 shadow-sm sm:text-sm p-2 border cursor-not-allowed font-bold text-gray-700">
+                                </div>
+                            </div>
+
+                            <div class="col-span-12">
+                                <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Observações</label>
+                                <textarea name="descricao" rows="2" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border"></textarea>
+                            </div>
+
+                            <div class="col-span-12 flex items-end gap-4">
+                                <div class="flex-1">
+                                    <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Anexar Arquivos</label>
+                                    <input type="file" name="fileAttachments" multiple class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-primary-600 file:text-primary-700 hover:file:bg-primary-100">
+                                </div>
+                                <button type="button" id="btn-ver-anexos" class="flex-shrink-0 inline-flex items-center px-3 py-2 border text-sm leading-4 font-medium rounded-md bg-white focus:outline-none" title="Ver anexos existentes">
+                                    <svg class="w-5 h-5 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+                                    Ver Anexos (0)
+                                </button>
+                            </div>
+                        </div>
+
+                        <div id="modal-admin-area" class="mt-6 pt-4 border-t border-gray-200 bg-gray-50 -mx-6 px-6 pb-2 hidden">
+                            <h4 class="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">Gestão de Aquisições</h4>
+                            <div class="grid grid-cols-12 gap-4">
+                                <div class="col-span-4">
+                                    <label class="block text-xs font-medium text-gray-500 mb-1">Modalidade</label>
+                                    <select name="modalidade" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-white"></select>
+                                </div>
+                                <div class="col-span-4">
+                                    <label class="block text-xs font-medium text-gray-500 mb-1">Grupo</label>
+                                    <select name="grupoDeCompra" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-white"></select>
+                                </div>
+                                <div class="col-span-4">
+                                    <label class="block text-xs font-medium text-gray-500 mb-1">Status</label>
+                                    <select name="status" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-white"></select>
+                                </div>
+                                <div class="col-span-3">
+                                    <label class="block text-xs font-medium text-gray-500 mb-1">Nº RN</label>
+                                    <input name="numRN" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-white">
+                                </div>
+                                <div class="col-span-3">
+                                    <label class="block text-xs font-medium text-gray-500 mb-1">Data RN</label>
+                                    <input name="dataAberturaRN" type="date" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-white">
+                                </div>
+                                <div class="col-span-3">
+                                    <label class="block text-xs font-medium text-gray-500 mb-1">Nº OC</label>
+                                    <input name="numOC" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-white">
+                                </div>
+                                <div class="col-span-3">
+                                    <label class="block text-xs font-medium text-gray-500 mb-1">Previsão</label>
+                                    <input name="dataPrevisao" type="date" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-white">
+                                </div>
+                                <div class="col-span-6">
+                                    <label class="block text-xs font-medium text-gray-500 mb-1">Fornecedor Definido</label>
+                                    <input list="fornecedores-datalist" name="fornecedor" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-white" placeholder="Digite para buscar...">
+                                    <datalist id="fornecedores-datalist"></datalist>
+                                </div>
+                                <div class="col-span-6">
+                                    <label class="block text-xs font-medium text-gray-500 mb-1">Segmento</label>
+                                    <input name="segmento" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-white">
+                                </div>
+                            </div>
+                        </div>
+                        </div>
+                    
+                    <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse border-t border-gray-200">
+                        <button type="submit" id="btn-save-pedido" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-primary-600 text-base font-medium text-white hover:bg-primary-700 focus:outline-none sm:ml-3 sm:w-auto sm:text-sm">Salvar</button>
+                        <button type="button" onclick="closePedidoModal()" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">Cancelar</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
     
+
+                            
+
+                <form id="form-funcionario" class="bg-gray-50 p-4 rounded-lg border border-gray-200 mb-6">
+                    <div class="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+                        <div class="md:col-span-1">
+                            <label class="block text-xs font-bold text-gray-700 uppercase mb-1">Empresa (Fornecedor)</label>
+                            <input list="datalist-fornecedores-func" name="empresa" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border" placeholder="Buscar..." required>
+                            <datalist id="datalist-fornecedores-func"></datalist>
+                        </div>
+                        <div class="md:col-span-1">
+                            <label class="block text-xs font-bold text-gray-700 uppercase mb-1">Nome Funcionário</label>
+                            <input name="nome" type="text" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border" required>
+                        </div>
+                        <div class="md:col-span-1">
+                            <label class="block text-xs font-bold text-gray-700 uppercase mb-1">Documento</label>
+                            <select name="tipoDoc" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-white">
+                                <option value="FAP">FAP (Validade 60 Dias)</option>
+                                <option value="ASO">ASO (Validade 365 Dias)</option>
+                            </select>
+                        </div>
+                        <div class="md:col-span-1">
+                            <label class="block text-xs font-bold text-gray-700 uppercase mb-1">Data Emissão</label>
+                            <input name="dataEmissao" type="date" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border" required>
+                        </div>
+                        <div class="md:col-span-3">
+                            <label class="block text-xs font-bold text-gray-700 uppercase mb-1">Anexo (PDF/Imagem)</label>
+                            <input type="file" name="fileDoc" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
+                        </div>
+                        <div class="md:col-span-1">
+                            <button type="submit" class="w-full bg-blue-600 text-white px-4 py-2 rounded shadow text-sm font-bold hover:bg-blue-700 h-10">Salvar</button>
+                        </div>
+                    </div>
+                </form>
+
+                <div class="overflow-hidden rounded-lg border border-gray-200">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-100">
+                            <tr>
+                                <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Funcionário / Empresa</th>
+                                <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Documento</th>
+                                <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Emissão</th>
+                                <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Validade</th>
+                                <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                                <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">Ações</th>
+                            </tr>
+                        </thead>
+                        <tbody id="table-funcionarios-body" class="bg-white divide-y divide-gray-200"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+
                                 <!-- Admin Area -->
                                 <div id="modal-admin-area" class="mt-6 pt-4 border-t border-gray-200 bg-gray-50 -mx-6 px-6 pb-2 hidden">
                                     <h4 class="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">Gestão de Aquisições</h4>
@@ -3793,6 +4747,9 @@ document.getElementById('form-fornecedor').addEventListener('submit', async e =>
                 </div>
             </div>
         </div>
+
+
+    
     
     </body>
     </html>
