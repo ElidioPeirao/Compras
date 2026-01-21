@@ -225,6 +225,9 @@
             const solText = document.getElementById('nav-solicitacoes-text');
             const servText = document.getElementById('nav-servicos-text');
             
+            // NOVO: Botão de Funcionários na aba Serviços
+            const btnFunc = document.getElementById('btn-gestao-funcionarios');
+            
             // Reset. Usando ?. para evitar o erro de ReferenceError
             adminNav?.classList.add('hidden');
             fornNav?.classList.add('hidden');
@@ -232,6 +235,9 @@
             nfNav?.classList.add('hidden');
             solNav?.classList.remove('hidden'); // Default visible
             servNav?.classList.remove('hidden'); // Default visible for services
+            
+            // Garante que comece escondido
+            if(btnFunc) btnFunc.classList.add('hidden');
 
             // Lógica de Visibilidade e Nomes
             if (perfil === 'Solicitante') {
@@ -249,11 +255,15 @@
                 fornNav?.classList.remove('hidden');
                 unitNav?.classList.remove('hidden');
                 nfNav?.classList.remove('hidden');
+                // Admin também vê botão de funcionários
+                if(btnFunc) btnFunc.classList.remove('hidden');
             } 
             else if (perfil === 'Aquisicoes') {
                 fornNav?.classList.remove('hidden');
                 unitNav?.classList.remove('hidden');
                 nfNav?.classList.remove('hidden');
+                // AQUI ESTÁ A LÓGICA: Aquisições vê o botão
+                if(btnFunc) btnFunc.classList.remove('hidden');
             }
             else if (perfil === 'Recebedor') {
                 // Recebedor vê apenas Dashboard e Gestão NF
@@ -262,14 +272,13 @@
                 servNav?.classList.add('hidden');
             }
             
-            // NOVO: Adiciona listener para o botão de toggle da sidebar
+            // Lógica do menu lateral (mantida igual)
             const toggleButton = document.getElementById('sidebar-toggle-btn');
             if (toggleButton) {
-                toggleButton.removeEventListener('click', toggleSidebar); // Evita duplicidade
+                toggleButton.removeEventListener('click', toggleSidebar);
                 toggleButton.addEventListener('click', toggleSidebar);
             }
 
-            // Garante que o estado inicial da UI corresponde ao estado da variável (ml-64 se aberta)
             const mainContent = document.getElementById('main-content-wrapper');
             const sidebar = document.getElementById('sidebar-wrapper');
             if (mainContent && sidebar) {
@@ -1504,203 +1513,190 @@ window.closeAttachmentsModal = () => {
 
 
         // --- GESTÃO DE NF ---
-        function renderGestaoNFPage() {
-            const tbody = document.getElementById('tabela-nf-body');
-            if (!tbody) return;
-            tbody.innerHTML = '';
+        window.renderGestaoNFPage = function() {
+    const tbody = document.getElementById('tabela-nf-body');
+    if (!tbody) return;
+    tbody.innerHTML = '';
 
-            const perfil = currentUserProfile.perfil || "Solicitante";
-            const isGestor = perfil === 'Aquisicoes' || perfil === 'Admin';
-            const isRecebedor = perfil === 'Recebedor';
-            
-            // Ler o filtro atual
-            const filterType = document.getElementById('filter-nf-status') ? document.getElementById('filter-nf-status').value : 'pendente';
+    const perfil = currentUserProfile.perfil || "Solicitante";
+    const isGestor = perfil === 'Aquisicoes' || perfil === 'Admin';
+    const isRecebedor = perfil === 'Recebedor';
+    
+    // Ler o filtro atual
+    const filterType = document.getElementById('filter-nf-status') ? document.getElementById('filter-nf-status').value : 'pendente';
 
-            
+    // 1. DEFINIR QUAIS STATUS DEVEM APARECER NA GESTÃO DE NF
+    // Adicionamos 'em-cotacao' e 'enviado-aquisicao' se tiverem RN definida, para não sumirem da tela após criar o grupo
+    const STATUSES_TO_TRACK = [
+        'registrado', 
+        'aguardando-entrega', 
+        'entregue', 
+        'aguardando-lancamento', 
+        'finalizado', 
+        'em-atraso'
+    ];
 
-            // Pedidos que estão no fluxo de gestão (já passaram da fase de solicitação inicial)
-            const STATUSES_TO_TRACK = ['registrado', 'aguardando-entrega', 'entregue', 'aguardando-lancamento', 'finalizado', 'em-atraso'];
-            const pedidosAtivos = state.pedidos.filter(p => STATUSES_TO_TRACK.includes(p.status));
+    // Filtra apenas os pedidos que estão nos status rastreáveis da NF
+    const pedidosAtivos = state.pedidos.filter(p => STATUSES_TO_TRACK.includes(p.status));
 
+    // 2. APLICAR O FILTRO SELECIONADO NA ABA
+    let pedidosFiltrados = [];
 
-            // Aplicar filtro da aba
-            let pedidosFiltrados = pedidosAtivos;
-            if (filterType === 'pendente') {
-                // Pedidos ATIVOS que AINDA NÃO FORAM FINALIZADOS e NÃO TÊM NF ANEXADA
-                pedidosFiltrados = pedidosAtivos.filter(p => p.status !== 'finalizado' && !p.urlNotaFiscal);
-            } else if (filterType === 'entregue') {
-                 // Pedidos ATIVOS que JÁ TÊM NF OU JÁ ESTÃO EM FASE DE LANÇAMENTO/FINALIZAÇÃO
-                pedidosFiltrados = pedidosAtivos.filter(p => p.urlNotaFiscal || ['aguardando-lancamento', 'finalizado'].includes(p.status));
-            }
-            // 'todos' retorna todos os pedidos ativos (STATUSES_TO_TRACK)
+    if (filterType === 'pendente') {
+        // "Aguardando Nota": Mostra tudo que está ativo, não finalizado e SEM arquivo de NF
+        // Isso inclui: Registrado, Aguardando Entrega, Em Atraso
+        pedidosFiltrados = pedidosAtivos.filter(p => p.status !== 'finalizado' && !p.urlNotaFiscal);
+    } 
+    else if (filterType === 'aguardando-entrega') {
+        // NOVO FILTRO: Específico para Aguardando Entrega
+        pedidosFiltrados = pedidosAtivos.filter(p => p.status === 'aguardando-entrega' || p.status === 'em-atraso');
+    }
+    else if (filterType === 'entregue') {
+        // "Nota Entregue": Itens que já têm NF OU já estão finalizados/lançamento
+        pedidosFiltrados = pedidosAtivos.filter(p => !!p.urlNotaFiscal || ['aguardando-lancamento', 'finalizado'].includes(p.status));
+    } 
+    else {
+        // "Todos"
+        pedidosFiltrados = pedidosAtivos;
+    }
 
-            if (pedidosFiltrados.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="7" class="py-10 text-center text-gray-500">Nenhum pedido encontrado com este filtro.</td></tr>`;
-                return;
-            }
+    if (pedidosFiltrados.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="7" class="py-10 text-center text-gray-500">Nenhum pedido encontrado com este filtro.</td></tr>`;
+        return;
+    }
 
-            // Agrupar por RN (Lógica Visual)
-            const grouped = [];
-            const rnMap = new Map();
+    // --- LÓGICA DE AGRUPAMENTO (MANTIDA) ---
+    const grouped = [];
+    const rnMap = new Map();
 
-            pedidosFiltrados.forEach(p => {
-                if (p.numRN) {
-                    if (!rnMap.has(p.numRN)) {
-                        rnMap.set(p.numRN, { 
-                            isGroup: true, 
-                            numRN: p.numRN,
-                            numOC: p.numOC, // Capture OC for grouping display
-                            items: [p], 
-                            total: parseFloat(p.valorTotal||0), 
-                            status: p.status, 
-                            fornecedor: p.fornecedor,
-                            hasNF: !!p.urlNotaFiscal,
-                            nfUrl: p.urlNotaFiscal,
-                            fin: p.fin, // Novo campo
-                            dataVcto: p.dataVcto // Novo campo
-                        });
-                        grouped.push(rnMap.get(p.numRN));
-                    } else {
-                        const g = rnMap.get(p.numRN);
-                        g.items.push(p);
-                        g.total += parseFloat(p.valorTotal||0);
-                        // Atualiza o status do grupo para o status "mais avançado"
-                         if (STATUS_MAP[p.status].text.length > STATUS_MAP[g.status].text.length) {
-                             g.status = p.status;
-                         }
-                        // O agrupamento herda o status de NF se qualquer item tiver NF
-                        if(!!p.urlNotaFiscal) g.hasNF = true;
-                    }
-                } else {
-                    grouped.push({ 
-                        isGroup: false, 
-                        ...p,
-                        hasNF: !!p.urlNotaFiscal,
-                        nfUrl: p.urlNotaFiscal
-                    });
-                }
-            });
-
-            grouped.forEach(item => {
-                const tr = document.createElement('tr');
-                tr.className = "hover:bg-gray-50 border-b border-gray-100";
+    pedidosFiltrados.forEach(p => {
+        if (p.numRN) {
+            if (!rnMap.has(p.numRN)) {
+                rnMap.set(p.numRN, { 
+                    isGroup: true, 
+                    numRN: p.numRN,
+                    numOC: p.numOC,
+                    items: [p], 
+                    total: parseFloat(p.valorTotal||0), 
+                    status: p.status, 
+                    fornecedor: p.fornecedor,
+                    hasNF: !!p.urlNotaFiscal,
+                    nfUrl: p.urlNotaFiscal,
+                    fin: p.fin,
+                    dataVcto: p.dataVcto
+                });
+                grouped.push(rnMap.get(p.numRN));
+            } else {
+                const g = rnMap.get(p.numRN);
+                g.items.push(p);
+                g.total += parseFloat(p.valorTotal||0);
                 
-                // Define targetId for current item scope (FIX for ReferenceError)
-                const targetId = item.isGroup ? item.numRN : item.id;
-
-                // Visual Indicator for Has NF
-                const nfIcon = item.hasNF ? 
-                    `<span class="ml-2 text-green-600" title="NF Anexada"><svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg></span>` : '';
-
-                // Ação e Display de Vencimento
-                let actionBtn = '';
-                let vctoDisplay = '';
+                // Lógica para exibir o status mais crítico ou avançado do grupo
+                // Prioriza 'aguardando-entrega' visualmente sobre 'registrado'
+                if (p.status === 'aguardando-entrega' || p.status === 'em-atraso') {
+                    g.status = p.status;
+                } else if (STATUS_MAP[p.status] && STATUS_MAP[g.status] && STATUS_MAP[p.status].text.length > STATUS_MAP[g.status].text.length) {
+                     g.status = p.status;
+                }
                 
-                if (isGestor || isRecebedor) { // Ações Gestor/Recebedor
-                    
-                    if (item.hasNF) {
-                        const fin = item.fin || '---';
-                        const vcto = item.dataVcto ? item.dataVcto.split('-').reverse().join('/') : '---';
-                        vctoDisplay = isGestor ? `
-                            <div class="text-sm font-medium text-gray-900">${fin}</div>
-                            <div class="text-xs text-gray-500">Vcto: ${vcto}</div>
-                        ` : '<div class="text-xs text-gray-400">NF Recebida</div>'; // Recebedor só precisa saber que foi recebida
-
-                        // ITENS INDIVIDUAIS COM NF
-                        actionBtn = `
-                            <div class="flex justify-end gap-2">
-                                <a href="${item.nfUrl}" target="_blank" class="bg-white border border-gray-300 text-gray-700 px-2 py-1 rounded text-xs hover:bg-gray-50 flex items-center gap-1" title="Ver NF">
-                                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
-                                </a>
-                                <button onclick="openNFModal('${targetId}', ${item.isGroup})" class="text-primary-600 hover:text-primary-800" title="${isGestor ? 'Editar NF e Dados Financeiros' : 'Anexar/Atualizar NF'}">
-                                    <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
-                                </button>
-                                ${isGestor ? `
-                                    <button onclick="deleteNFItem('${item.id}', false)" class="text-red-600 hover:text-red-800" title="Excluir Item de Pedido">
-                                        <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                                    </button>
-                                ` : ''}
-                            </div>
-                        `;
-                    } else {
-                        // ITENS INDIVIDUAIS SEM NF
-                        vctoDisplay = isGestor ? '<div class="text-xs text-gray-400">Aguardando NF</div>' : '';
-                        actionBtn = `
-                            <button onclick="openNFModal('${targetId}', ${item.isGroup})" class="bg-green-600 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-green-700 shadow-sm flex items-center gap-1 ml-auto">
-                                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
-                                Anexar NF
-                            </button>
-                            ${isGestor ? `
-                                <button onclick="deleteNFItem('${item.id}', false)" class="text-red-600 hover:text-red-800 ml-2" title="Excluir ${item.isGroup ? 'Agrupamento' : 'Item'}">
-                                    <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                                </button>
-                            ` : ''}
-                        `;
-                    }
-                } else {
-                    // Item não relevante para Recebedor/Gestor (tecnicamente não deveria cair aqui com os filtros)
-                    actionBtn = '---';
-                    vctoDisplay = '---';
-                }
-
-
-                if (item.isGroup) {
-                       const st = STATUS_MAP[item.status] || { text: item.status, class: "bg-gray-100" };
-                       // MOSTRAR OC AO INVÉS DE RN
-                       const ocDisplay = item.numOC ? (item.numOC ? `OC ${item.numOC}` : `RN ${item.numRN}`) : `AGRUPAMENTO`;
-                       
-                       // A célula de FIN/Vcto só é mostrada para o Gestor na linha de grupo.
-                       const finVctoCell = isGestor ? `<td class="px-4 py-4 text-left">${vctoDisplay}</td>` : '';
-                        
-                       // Ação de grupo (Gestor/Recebedor)
-                       let groupActionHtml = '';
-                       if (isGestor) {
-                           groupActionHtml = `
-                                <div class="flex justify-end gap-2">
-                                    ${item.hasNF ? `<a href="${item.nfUrl}" target="_blank" class="text-gray-700 hover:text-gray-900 px-2 py-1 rounded text-xs border border-gray-300 bg-white" title="Ver NF (Grupo)">Ver NF</a>` : ''}
-                                    <button onclick="openNFModal('${item.numRN}', true)" class="text-primary-600 hover:text-primary-800" title="Editar Dados Financeiros/NF (Grupo)">
-                                        <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
-                                    </button>
-                                    <button onclick="deleteNFItem('${targetId}', true)" class="text-red-600 hover:text-red-800" title="Excluir Agrupamento (Itens)">
-                                        <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                                    </button>
-                                </div>
-                           `;
-                       } else if (isRecebedor) {
-                           // Botão Único para Recebedor
-                           groupActionHtml = `
-                               <button onclick="openNFModal('${item.numRN}', true)" class="bg-green-600 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-green-700 shadow-sm flex items-center gap-1 ml-auto">
-                                   <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg> Anexar NF
-                               </button>
-                           `;
-                       } else {
-                            // Para Solicitante (Apenas ver NF se existir)
-                            groupActionHtml = `
-                                <div class="flex justify-end gap-2">
-                                    ${item.hasNF ? `<a href="${item.nfUrl}" target="_blank" class="text-gray-700 hover:text-gray-900 px-2 py-1 rounded text-xs border border-gray-300 bg-white" title="Ver NF (Grupo)">Ver NF</a>` : ''}
-                                </div>
-                            `;
-                       }
-
-                       tr.innerHTML = `
-                        <td class="px-4 py-4 font-bold text-primary-700 flex items-center gap-2">
-                            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" /></svg>
-                            ${ocDisplay} ${nfIcon}
-                        </td>
-                        <td class="px-4 py-4 text-sm text-gray-600">Agrupamento (${item.items.length} itens)</td>
-                        <td class="px-4 py-4 text-sm text-gray-900">${item.fornecedor || '-'}</td>
-                        <td class="px-4 py-4 text-sm font-bold text-gray-900">R$ ${item.total.toFixed(2)}</td>
-                        <td class="px-4 py-4"><span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${st.class}">${st.text}</span></td>
-                        ${finVctoCell} 
-                        <td class="px-4 py-4 text-right flex items-center justify-end gap-2">
-                            ${groupActionHtml}
-                            <button onclick="window.openGroupDetails('${item.numRN || item.items[0].id}')" class="text-primary-600 hover:text-primary-800 text-sm font-semibold">Ver Itens</button>
-                        </td>
-                       `;
-                }
-                tbody.appendChild(tr);
+                if(!!p.urlNotaFiscal) g.hasNF = true;
+            }
+        } else {
+            grouped.push({ 
+                isGroup: false, 
+                ...p,
+                hasNF: !!p.urlNotaFiscal,
+                nfUrl: p.urlNotaFiscal
             });
         }
+    });
+
+    // --- RENDERIZAÇÃO (MANTIDA COM PEQUENOS AJUSTES) ---
+    grouped.forEach(item => {
+        const tr = document.createElement('tr');
+        tr.className = "hover:bg-gray-50 border-b border-gray-100";
+        
+        const targetId = item.isGroup ? item.numRN : item.id;
+        const nfIcon = item.hasNF ? `<span class="ml-2 text-green-600" title="NF Anexada"><svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg></span>` : '';
+
+        let actionBtn = '';
+        let vctoDisplay = '';
+        
+        if (isGestor || isRecebedor) {
+            if (item.hasNF) {
+                const fin = item.fin || '---';
+                const vcto = item.dataVcto ? item.dataVcto.split('-').reverse().join('/') : '---';
+                vctoDisplay = isGestor ? `<div class="text-sm font-medium text-gray-900">${fin}</div><div class="text-xs text-gray-500">Vcto: ${vcto}</div>` : '<div class="text-xs text-gray-400">NF Recebida</div>';
+                
+                actionBtn = `
+                    <div class="flex justify-end gap-2">
+                        <a href="${item.nfUrl}" target="_blank" class="bg-white border border-gray-300 text-gray-700 px-2 py-1 rounded text-xs hover:bg-gray-50 flex items-center gap-1" title="Ver NF">
+                            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+                        </a>
+                        <button onclick="openNFModal('${targetId}', ${item.isGroup})" class="text-primary-600 hover:text-primary-800" title="Editar NF"><svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg></button>
+                    </div>`;
+            } else {
+                vctoDisplay = isGestor ? '<div class="text-xs text-gray-400">Aguardando NF</div>' : '';
+                actionBtn = `<button onclick="openNFModal('${targetId}', ${item.isGroup})" class="bg-green-600 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-green-700 shadow-sm flex items-center gap-1 ml-auto"><svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg> Anexar NF</button>`;
+            }
+        } else {
+            actionBtn = '---'; vctoDisplay = '---';
+        }
+
+        if (item.isGroup) {
+            const st = STATUS_MAP[item.status] || { text: item.status, class: "bg-gray-100" };
+            const ocDisplay = item.numOC ? `OC ${item.numOC}` : `RN ${item.numRN}`;
+            const finVctoCell = isGestor ? `<td class="px-4 py-4 text-left">${vctoDisplay}</td>` : '';
+            
+            // Botões do Grupo
+            let groupActionHtml = actionBtn; // Default para item único se comportar igual
+            if(item.isGroup && isGestor) {
+                 // Recria botões específicos para grupo se necessário ou usa a lógica acima simplificada
+                 if(item.hasNF) {
+                     groupActionHtml = `<div class="flex justify-end gap-2"><a href="${item.nfUrl}" target="_blank" class="text-gray-700 px-2 border rounded text-xs bg-white">Ver NF</a><button onclick="openNFModal('${item.numRN}', true)" class="text-primary-600"><svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg></button></div>`;
+                 } else {
+                     groupActionHtml = `<button onclick="openNFModal('${item.numRN}', true)" class="bg-green-600 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-green-700 ml-auto flex gap-1">Anexar NF (Grupo)</button>`;
+                 }
+            }
+
+            tr.innerHTML = `
+                <td class="px-4 py-4 font-bold text-primary-700 flex items-center gap-2">
+                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" /></svg>
+                    ${ocDisplay} ${nfIcon}
+                </td>
+                <td class="px-4 py-4 text-sm text-gray-600">Agrupamento (${item.items.length} itens)</td>
+                <td class="px-4 py-4 text-sm text-gray-900">${item.fornecedor || '-'}</td>
+                <td class="px-4 py-4 text-sm font-bold text-gray-900">R$ ${item.total.toFixed(2)}</td>
+                <td class="px-4 py-4"><span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${st.class}">${st.text}</span></td>
+                ${finVctoCell} 
+                <td class="px-4 py-4 text-right flex items-center justify-end gap-2">
+                    ${groupActionHtml}
+                    <button onclick="window.openGroupDetails('${item.numRN}')" class="text-primary-600 hover:text-primary-800 text-sm font-semibold">Ver Itens</button>
+                </td>
+            `;
+        } else {
+            // ITEM INDIVIDUAL NA GESTÃO DE NF (Sem RN)
+            const st = STATUS_MAP[item.status] || { text: item.status, class: "bg-gray-100" };
+            const finVctoCell = isGestor ? `<td class="px-4 py-4 text-left">${vctoDisplay}</td>` : '';
+
+            tr.innerHTML = `
+                <td class="px-4 py-4 text-sm text-gray-500 font-mono">--- ${nfIcon}</td>
+                <td class="px-4 py-4 text-sm text-gray-900">
+                    <div class="font-medium">${item.nomeProduto}</div>
+                    <div class="text-xs text-gray-500">${item.unidade}</div>
+                </td>
+                <td class="px-4 py-4 text-sm text-gray-900">${item.fornecedor || '-'}</td>
+                <td class="px-4 py-4 text-sm font-bold text-gray-900">R$ ${parseFloat(item.valorTotal).toFixed(2)}</td>
+                <td class="px-4 py-4"><span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${st.class}">${st.text}</span></td>
+                ${finVctoCell}
+                <td class="px-4 py-4 text-right">
+                    ${actionBtn}
+                </td>
+            `;
+        }
+        tbody.appendChild(tr);
+    });
+};
 
         // Modal e Lógica de Upload NF
         window.openNFModal = (idOrRN, isGroup) => {
@@ -3754,10 +3750,10 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
     <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
         <h2 id="servicos-title" class="text-2xl font-bold text-gray-900">Gestão de Serviços</h2>
         <div class="flex gap-2">
-            <button onclick="openFuncionariosModal()" class="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 focus:outline-none">
-                <svg class="mr-2 -ml-1 h-5 w-5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" /></svg>
-                Funcionários (FAP/ASO)
-            </button>
+           <button id="btn-gestao-funcionarios" onclick="openFuncionariosModal()" class="hidden inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 focus:outline-none">
+    <svg class="mr-2 -ml-1 h-5 w-5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" /></svg>
+    Funcionários (FAP/ASO)
+</button>
             <button onclick="openServicoModal()" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700 focus:outline-none">
                 <svg class="-ml-1 mr-2 h-5 w-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" /></svg>
                 Solicitar Serviço
