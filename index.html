@@ -101,7 +101,10 @@
             linksExternos: [], 
             selectedPedidos: [], 
             filtros: { unidade: "", modalidade: "", status: "", search: "", fornecedor: "" }, // NOVO: Adicionado campo de busca
-            isSidebarOpen: true // NOVO: Estado da barra lateral
+            isSidebarOpen: true,
+            sortConfig: { field: 'dataSolicitacao', direction: 'desc' }// NOVO: Estado da barra lateral
+
+            
         };
 
         const STATUS_MAP = {
@@ -573,14 +576,48 @@ function checkGroupSupplierLimit() {
     });
 
     // Ordenação: Grupos primeiro, depois data
+    // --- 3. ORDENAÇÃO DINÂMICA ---
     grouped.sort((a, b) => {
-        if (a.isGroup && !b.isGroup) return -1;
-        if (!a.isGroup && b.isGroup) return 1;
+        const field = state.sortConfig.field || 'dataSolicitacao';
+        const dir = state.sortConfig.direction === 'asc' ? 1 : -1;
+        let valA, valB;
+
+        // Lógica para extrair os valores dependendo se é Grupo ou Item Individual
+        if (field === 'dataSolicitacao') {
+            // Data: Prioriza data da RN para grupos, ou data da solicitação para itens
+            let dateRa = a.isGroup ? (a.dateRN || (a.items[0]?.dataSolicitacao)) : a.dataSolicitacao;
+            let dateRb = b.isGroup ? (b.dateRN || (b.items[0]?.dataSolicitacao)) : b.dataSolicitacao;
+            
+            // Converte para Timestamp numérico para comparar
+            valA = dateRa?.toDate ? dateRa.toDate().getTime() : new Date(dateRa || 0).getTime();
+            valB = dateRb?.toDate ? dateRb.toDate().getTime() : new Date(dateRb || 0).getTime();
+        } 
+        else if (field === 'valorTotal') {
+            // Valor: Total do grupo vs Valor do item
+            valA = a.isGroup ? a.total : (parseFloat(a.valorTotal) || 0);
+            valB = b.isGroup ? b.total : (parseFloat(b.valorTotal) || 0);
+        }
+        else if (field === 'unidade') {
+            // Unidade: Texto (para grupo pega a primeira unidade ou 'Várias')
+            valA = (a.isGroup ? (a.items[0]?.unidade || '') : a.unidade).toLowerCase();
+            valB = (b.isGroup ? (b.items[0]?.unidade || '') : b.unidade).toLowerCase();
+        }
+        else if (field === 'status') {
+            // Status: Texto
+            valA = (a.status || '').toLowerCase();
+            valB = (b.status || '').toLowerCase();
+        }
+        else {
+            // Fallback (ex: por ID ou nome)
+            valA = ''; valB = '';
+        }
+
+        // Executa a comparação
+        if (valA < valB) return -1 * dir;
+        if (valA > valB) return 1 * dir;
         
-        // Ordena por data (mais recente primeiro)
-        const dateA = a.dataSolicitacao?.toDate ? a.dataSolicitacao.toDate() : new Date(0);
-        const dateB = b.dataSolicitacao?.toDate ? b.dataSolicitacao.toDate() : new Date(0);
-        return dateB.getTime() - dateA.getTime();
+        // Critério de desempate: Sempre Data mais recente
+        return 0; 
     });
 
     // --- 3. RENDERIZAÇÃO DO HTML ---
@@ -708,6 +745,24 @@ function checkGroupSupplierLimit() {
             // 3. Esconde a barra azul
             updateBulkActionBar();
         };
+
+
+        // --- FUNÇÃO DE ORDENAÇÃO ---
+window.sortPedidos = (field) => {
+    // Se clicar na mesma coluna, inverte a direção
+    if (state.sortConfig.field === field) {
+        state.sortConfig.direction = state.sortConfig.direction === 'asc' ? 'desc' : 'asc';
+    } else {
+        // Se for nova coluna, define como padrão
+        state.sortConfig.field = field;
+        // Padrão para data e valor é decrescente (maior primeiro), para texto é crescente
+        state.sortConfig.direction = (field === 'dataSolicitacao' || field === 'valorTotal') ? 'desc' : 'asc';
+    }
+    
+    // Redesenha a tabela com a nova ordem
+    renderPedidosTable(state.pedidos);
+};
+
 
         // --- NOVA TABELA DE SERVIÇOS ---
 // CORREÇÃO: Sintaxe correta para tornar a função global
@@ -3618,16 +3673,36 @@ document.getElementById('btn-bulk-rn').addEventListener('click', () => {
                     <div class="overflow-x-auto">
                         <table id="tabela-pedidos-solicitacoes" class="min-w-full divide-y divide-gray-200">
                             <thead class="bg-gray-50">
-                                <tr>
-                                    <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-10">#</th>
-                                    <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">RN</th>
-                                    <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" colspan="3">Unidade/Fornecedor/Previsão</th>
-                                    <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Data</th>
-                                    <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Valor</th>
-                                    <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                                    <th class="px-3 py-3"></th>
-                                </tr>
-                            </thead>
+    <tr>
+        <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-10">#</th>
+        <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">RN</th>
+        
+        <th onclick="sortPedidos('unidade')" class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:text-primary-600 hover:bg-gray-100 transition-colors select-none group">
+            Unidade 
+            <span class="hidden group-hover:inline">↕</span>
+        </th>
+        
+        <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Produto</th>
+        <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Mod.</th>
+
+        <th onclick="sortPedidos('dataSolicitacao')" class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:text-primary-600 hover:bg-gray-100 transition-colors select-none group">
+            Data
+            <span class="hidden group-hover:inline">↕</span>
+        </th>
+
+        <th onclick="sortPedidos('valorTotal')" class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:text-primary-600 hover:bg-gray-100 transition-colors select-none group">
+            Valor
+            <span class="hidden group-hover:inline">↕</span>
+        </th>
+
+        <th onclick="sortPedidos('status')" class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:text-primary-600 hover:bg-gray-100 transition-colors select-none group">
+            Status
+            <span class="hidden group-hover:inline">↕</span>
+        </th>
+
+        <th class="px-3 py-3"></th>
+    </tr>
+</thead>
                             <tbody class="bg-white divide-y divide-gray-200"></tbody>
                         </table>
                     </div>
@@ -4468,58 +4543,7 @@ document.getElementById('btn-bulk-rn').addEventListener('click', () => {
 
                             
 
-                <form id="form-funcionario" class="bg-gray-50 p-4 rounded-lg border border-gray-200 mb-6">
-                    <div class="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
-                        <div class="md:col-span-1">
-                            <label class="block text-xs font-bold text-gray-700 uppercase mb-1">Empresa (Fornecedor)</label>
-                            <input list="datalist-fornecedores-func" name="empresa" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border" placeholder="Buscar..." required>
-                            <datalist id="datalist-fornecedores-func"></datalist>
-                        </div>
-                        <div class="md:col-span-1">
-                            <label class="block text-xs font-bold text-gray-700 uppercase mb-1">Nome Funcionário</label>
-                            <input name="nome" type="text" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border" required>
-                        </div>
-                        <div class="md:col-span-1">
-                            <label class="block text-xs font-bold text-gray-700 uppercase mb-1">Documento</label>
-                            <select name="tipoDoc" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-white">
-                                <option value="FAP">FAP (Validade 60 Dias)</option>
-                                <option value="ASO">ASO (Validade 365 Dias)</option>
-                            </select>
-                        </div>
-                        <div class="md:col-span-1">
-                            <label class="block text-xs font-bold text-gray-700 uppercase mb-1">Data Emissão</label>
-                            <input name="dataEmissao" type="date" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border" required>
-                        </div>
-                        <div class="md:col-span-3">
-                            <label class="block text-xs font-bold text-gray-700 uppercase mb-1">Anexo (PDF/Imagem)</label>
-                            <input type="file" name="fileDoc" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
-                        </div>
-                        <div class="md:col-span-1">
-                            <button type="submit" class="w-full bg-blue-600 text-white px-4 py-2 rounded shadow text-sm font-bold hover:bg-blue-700 h-10">Salvar</button>
-                        </div>
-                    </div>
-                </form>
-
-                <div class="overflow-hidden rounded-lg border border-gray-200">
-                    <table class="min-w-full divide-y divide-gray-200">
-                        <thead class="bg-gray-100">
-                            <tr>
-                                <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Funcionário / Empresa</th>
-                                <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Documento</th>
-                                <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Emissão</th>
-                                <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Validade</th>
-                                <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                                <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">Ações</th>
-                            </tr>
-                        </thead>
-                        <tbody id="table-funcionarios-body" class="bg-white divide-y divide-gray-200"></tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-
+            
 
                                 <!-- Admin Area -->
                                 <div id="modal-admin-area" class="mt-6 pt-4 border-t border-gray-200 bg-gray-50 -mx-6 px-6 pb-2 hidden">
