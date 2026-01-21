@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="pt-br" class="h-full bg-slate-900 antialiased">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GUARITA | Controle de Acesso</title>
+    
+    <link rel="stylesheet" href="https://rsms.me/inter/inter.css">
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: { fontFamily: { sans: ['Inter', 'sans-serif'] } }
+            }
+        }
+    </script>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getFirestore, collection, query, where, getDocs, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+
+        // -----------------------------------------------------------
+        // ⚠️ SUBSTITUA PELAS SUAS CHAVES DO FIREBASE AQUI
+        // -----------------------------------------------------------
+const firebaseConfig = {
+            apiKey: "AIzaSyAHAO1ZJrc5JYgut4tjcJX-vbKlEaFn6cQ",
+            authDomain: "comprassenai-40755.firebaseapp.com",
+            projectId: "comprassenai-40755",
+            storageBucket: "comprassenai-40755.firebasestorage.app",
+            messagingSenderId: "592503297730",
+            appId: "1:592503297730:web:cb40e3711d1f9647908d5b",
+            measurementId: "G-74W14C81WX"
+};
+
+        // --- CAMINHO ATUALIZADO COM SEU ID ---
+        const appId = "1:592503297730:web:cb40e3711d1f9647908d5b"; 
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+
+        // --- VARIÁVEIS GLOBAIS ---
+        let allEmployees = []; 
+        let activeOrders = []; 
+        
+        const inputSearch = document.getElementById('search-input');
+        const resultsList = document.getElementById('results-list');
+        const loadingIndicator = document.getElementById('loading-data');
+
+        // --- MONITORAR LOGIN ---
+        onAuthStateChanged(auth, (user) => {
+            const loginPage = document.getElementById('login-page');
+            const appPage = document.getElementById('app-page');
+
+            if (user) {
+                loginPage.classList.add('hidden');
+                appPage.classList.remove('hidden');
+                initData(); 
+            } else {
+                loginPage.classList.remove('hidden');
+                appPage.classList.add('hidden');
+            }
+        });
+
+        // --- FUNÇÃO DE LOGIN ---
+        window.handleLogin = async (e) => {
+            e.preventDefault();
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            const btn = document.getElementById('btn-login');
+            const errorMsg = document.getElementById('login-error');
+            
+            btn.disabled = true;
+            btn.textContent = "Verificando...";
+            errorMsg.classList.add('hidden');
+
+            try {
+                await signInWithEmailAndPassword(auth, email, password);
+            } catch (error) {
+                console.error(error);
+                errorMsg.textContent = "Acesso negado. Verifique email/senha.";
+                errorMsg.classList.remove('hidden');
+                btn.disabled = false;
+                btn.textContent = "Acessar Sistema";
+            }
+        };
+
+        window.handleLogout = () => {
+            signOut(auth);
+            window.location.reload();
+        };
+
+        // --- DADOS: Carregamento Inicial (CORRIGIDO PARA O CAMINHO ESPECÍFICO) ---
+        function initData() {
+            loadingIndicator.classList.remove('hidden');
+            loadingIndicator.textContent = "Carregando base de funcionários...";
+
+            // 1. Caminho EXATO dos Funcionários
+            // artifacts > ID > public > data > funcionarios
+            const funcionariosRef = collection(db, "artifacts", appId, "public", "data", "funcionarios");
+
+            onSnapshot(funcionariosRef, (snapshot) => {
+                allEmployees = [];
+                snapshot.forEach(doc => {
+                    const d = doc.data();
+                    allEmployees.push({ 
+                        id: doc.id, 
+                        nome: d.nome || "Sem Nome", 
+                        empresa: d.empresa || "Sem Empresa",
+                        tipoDoc: d.tipoDoc || "N/A",
+                        // Garante que pega a data certa, independente do nome do campo
+                        dataEmissao: d.dataEmissao || d.dataEmissaoDoc 
+                    });
+                });
+                
+                console.log("Funcionários carregados:", allEmployees.length);
+
+                if (allEmployees.length > 0) {
+                    loadingIndicator.textContent = "Sistema Conectado. " + allEmployees.length + " funcionários ativos.";
+                    loadingIndicator.classList.add('text-green-500');
+                    loadingIndicator.classList.remove('text-yellow-500', 'animate-pulse');
+                    setTimeout(() => loadingIndicator.classList.add('hidden'), 3000);
+                } else {
+                    loadingIndicator.textContent = "Conectado, mas a lista de funcionários está vazia neste caminho.";
+                    loadingIndicator.classList.add('text-orange-500');
+                }
+            }, (error) => {
+                console.error("Erro ao ler funcionários:", error);
+                loadingIndicator.textContent = "Erro de leitura: " + error.message;
+                loadingIndicator.classList.add('text-red-500');
+            });
+
+            // 2. Caminho EXATO dos Pedidos (para ver serviços)
+            // artifacts > ID > public > data > pedidos
+            const pedidosRef = collection(db, "artifacts", appId, "public", "data", "pedidos");
+
+            const q = query(
+                pedidosRef, 
+                where("modalidade", "==", "Serviço"),
+                where("status", "!=", "finalizado"),
+                where("status", "!=", "cancelado")
+            );
+
+            onSnapshot(q, (snapshot) => {
+                activeOrders = [];
+                snapshot.forEach(doc => {
+                    activeOrders.push(doc.data());
+                });
+                console.log("Serviços ativos carregados:", activeOrders.length);
+            });
+        }
+
+        // --- FUNÇÃO DE BUSCA ---
+        inputSearch.addEventListener('input', (e) => {
+            const term = e.target.value.trim().toLowerCase();
+            
+            if (term.length < 3) {
+                resultsList.innerHTML = '';
+                resultsList.classList.add('hidden');
+                return;
+            }
+
+            const matches = allEmployees.filter(func => 
+                func.nome.toLowerCase().includes(term) || 
+                (func.empresa && func.empresa.toLowerCase().includes(term))
+            );
+
+            renderList(matches);
+        });
+
+        // --- RENDERIZAR LISTA ---
+        function renderList(list) {
+            resultsList.innerHTML = '';
+            resultsList.classList.remove('hidden');
+            
+            if (list.length === 0) {
+                resultsList.innerHTML = '<li class="p-4 text-gray-500 text-center">Nenhum funcionário encontrado.</li>';
+                return;
+            }
+
+            list.forEach(func => {
+                const li = document.createElement('li');
+                li.className = "p-4 border-b border-slate-700 hover:bg-slate-700 cursor-pointer transition-colors flex justify-between items-center bg-slate-800";
+                li.innerHTML = `
+                    <div>
+                        <div class="text-white font-medium text-lg">${func.nome}</div>
+                        <div class="text-slate-400 text-sm">${func.empresa}</div>
+                    </div>
+                    <div class="text-xs bg-slate-900 px-2 py-1 rounded text-slate-500 border border-slate-700">Verificar</div>
+                `;
+                li.onclick = () => analyzeAccess(func);
+                resultsList.appendChild(li);
+            });
+        }
+
+        // --- ANÁLISE DE ACESSO ---
+        function analyzeAccess(func) {
+            resultsList.classList.add('hidden');
+            inputSearch.value = ''; 
+            
+            // 1. Validade Documentos
+            const validadeFAP = 60;
+            const validadeASO = 365;
+            
+            let dataEmissaoDoc;
+            // Tenta converter string ou Timestamp do Firestore
+            try { 
+                if (func.dataEmissao && func.dataEmissao.toDate) {
+                    dataEmissaoDoc = func.dataEmissao.toDate();
+                } else {
+                    dataEmissaoDoc = new Date(func.dataEmissao + 'T00:00:00'); 
+                }
+            } catch(e) { dataEmissaoDoc = new Date(0); }
+            
+            const diasValidade = func.tipoDoc === 'FAP' ? validadeFAP : validadeASO;
+            const dataVencimento = new Date(dataEmissaoDoc);
+            dataVencimento.setDate(dataVencimento.getDate() + diasValidade);
+            
+            const hoje = new Date();
+            hoje.setHours(0,0,0,0);
+            
+            const docVencido = dataVencimento < hoje;
+            const diasRestantes = Math.ceil((dataVencimento - hoje) / (1000 * 60 * 60 * 24));
+
+            // 2. Busca Serviço (Case Insensitive)
+            const servicosDoFuncionario = activeOrders.filter(order => 
+                order.funcionario && order.funcionario.toLowerCase() === func.nome.toLowerCase()
+            );
+
+            let servicoInfo = null;
+            if (servicosDoFuncionario.length > 0) {
+                // Tenta achar serviço futuro
+                servicoInfo = servicosDoFuncionario.find(s => {
+                    if (!s.dataPrevisao) return false;
+                    const dt = new Date(s.dataPrevisao + 'T00:00:00');
+                    return dt >= hoje;
+                });
+                // Fallback para o primeiro encontrado
+                if (!servicoInfo) servicoInfo = servicosDoFuncionario[0];
+            }
+
+            renderCard(func, docVencido, dataVencimento, diasRestantes, servicoInfo);
+        }
+
+        // --- RENDERIZAR CARTÃO ---
+        function renderCard(func, isVencido, dataVencimento, diasRestantes, servico) {
+            const card = document.getElementById('card-status');
+            const header = document.getElementById('status-header');
+            const title = document.getElementById('status-title');
+            const icon = document.getElementById('status-icon');
+            const body = document.getElementById('status-body');
+
+            let statusColor = '';
+            let statusText = '';
+            let statusIconSVG = '';
+
+            if (isVencido) {
+                statusColor = 'bg-red-600';
+                statusText = 'ACESSO NEGADO';
+                statusIconSVG = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />`;
+            } else if (!servico) {
+                statusColor = 'bg-yellow-600';
+                statusText = 'SEM SERVIÇO AGENDADO';
+                statusIconSVG = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />`;
+            } else {
+                statusColor = 'bg-green-600';
+                statusText = 'ACESSO LIBERADO';
+                statusIconSVG = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />`;
+            }
+
+            header.className = `w-full p-6 text-center ${statusColor}`;
+            title.textContent = statusText;
+            icon.innerHTML = statusIconSVG;
+
+            let dataServicoStr = "---";
+            if (servico && servico.dataPrevisao) {
+                const partes = servico.dataPrevisao.split('-');
+                dataServicoStr = `${partes[2]}/${partes[1]}/${partes[0]}`;
+            }
+
+            body.innerHTML = `
+                <div class="text-center mb-6">
+                    <h2 class="text-3xl font-bold text-white mb-1">${func.nome}</h2>
+                    <p class="text-slate-400 text-lg">${func.empresa}</p>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div class="bg-slate-700 rounded-xl p-5 border ${isVencido ? 'border-red-500' : 'border-green-500'} relative overflow-hidden">
+                        <div class="text-xs text-slate-400 uppercase font-bold mb-1 tracking-wider">Documentação (${func.tipoDoc})</div>
+                        <div class="text-2xl font-black ${isVencido ? 'text-red-400' : 'text-green-400'} mb-2">
+                            ${isVencido ? 'VENCIDO' : 'EM DIA'}
+                        </div>
+                        <div class="text-sm text-slate-300">
+                            Vence em: <strong class="text-white">${dataVencimento.toLocaleDateString('pt-BR')}</strong>
+                        </div>
+                        <div class="text-xs mt-1 ${diasRestantes < 0 ? 'text-red-400' : 'text-slate-400'}">
+                            (${diasRestantes < 0 ? Math.abs(diasRestantes) + ' dias atrasado' : diasRestantes + ' dias restantes'})
+                        </div>
+                    </div>
+
+                    <div class="bg-slate-700 rounded-xl p-5 border ${!servico ? 'border-yellow-500' : 'border-blue-500'} relative overflow-hidden">
+                        <div class="text-xs text-slate-400 uppercase font-bold mb-1 tracking-wider">Serviço Agendado</div>
+                        ${servico ? `
+                            <div class="text-white font-bold text-lg leading-tight mb-2 line-clamp-2">${servico.nomeProduto}</div>
+                            <div class="text-sm text-blue-300 font-semibold mb-1">
+                                Data: ${dataServicoStr}
+                            </div>
+                            <div class="text-xs text-slate-400 mt-2 p-1 bg-slate-800 rounded inline-block border border-slate-600">
+                                Unidade: ${servico.unidade}
+                            </div>
+                        ` : `
+                            <div class="text-yellow-400 font-bold text-lg mb-1">Nenhum Encontrado</div>
+                            <div class="text-xs text-slate-400">Verifique com o setor responsável.</div>
+                        `}
+                    </div>
+                </div>
+
+                <div class="mt-8 text-center">
+                    <button onclick="resetSearch()" class="w-full bg-slate-600 hover:bg-slate-500 text-white px-6 py-4 rounded-xl font-bold text-lg shadow-lg transition-transform active:scale-95 focus:outline-none focus:ring-2 focus:ring-slate-400">
+                        Nova Pesquisa
+                    </button>
+                </div>
+            `;
+
+            card.classList.remove('hidden');
+        }
+
+        window.resetSearch = () => {
+            document.getElementById('card-status').classList.add('hidden');
+            document.getElementById('search-input').focus();
+        }
+
+    </script>
+</head>
+<body class="bg-slate-900 min-h-screen text-white font-sans antialiased">
+
+    <div id="login-page" class="flex min-h-screen flex-col justify-center px-6 py-12 lg:px-8">
+        <div class="sm:mx-auto sm:w-full sm:max-w-sm text-center">
+            <h1 class="text-4xl font-black tracking-tight text-white mb-2">AQUISYS <span class="text-blue-500">GUARITA</span></h1>
+            <p class="text-slate-400">Login Obrigatório</p>
+        </div>
+
+        <div class="mt-10 sm:mx-auto sm:w-full sm:max-w-sm bg-slate-800 p-8 rounded-2xl border border-slate-700 shadow-2xl">
+            <form class="space-y-6" onsubmit="handleLogin(event)">
+                <div>
+                    <label for="email" class="block text-sm font-medium text-slate-300">Email</label>
+                    <div class="mt-2">
+                        <input id="email" type="email" required class="block w-full rounded-lg border-0 bg-slate-700/50 py-2.5 px-3 text-white shadow-sm ring-1 ring-inset ring-slate-600 placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-blue-500 sm:text-sm sm:leading-6">
+                    </div>
+                </div>
+
+                <div>
+                    <label for="password" class="block text-sm font-medium text-slate-300">Senha</label>
+                    <div class="mt-2">
+                        <input id="password" type="password" required class="block w-full rounded-lg border-0 bg-slate-700/50 py-2.5 px-3 text-white shadow-sm ring-1 ring-inset ring-slate-600 placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-blue-500 sm:text-sm sm:leading-6">
+                    </div>
+                </div>
+
+                <div id="login-error" class="hidden text-red-400 text-sm text-center bg-red-900/20 p-2 rounded border border-red-900/50"></div>
+
+                <div>
+                    <button type="submit" id="btn-login" class="flex w-full justify-center rounded-lg bg-blue-600 px-3 py-2.5 text-sm font-semibold leading-6 text-white shadow-sm hover:bg-blue-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 transition-colors">Acessar Sistema</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="app-page" class="hidden flex flex-col items-center min-h-screen p-4">
+        
+        <div class="w-full flex justify-end mb-4">
+            <button onclick="handleLogout()" class="text-xs text-slate-500 hover:text-white flex items-center gap-1">
+                Sair
+                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>
+            </button>
+        </div>
+
+        <div class="mt-2 mb-8 text-center">
+            <h1 class="text-4xl font-black text-white tracking-tighter">AQUISYS <span class="text-blue-500">GUARITA</span></h1>
+            <p class="text-slate-400">Sistema de Controle de Acesso</p>
+            <p id="loading-data" class="text-xs text-yellow-500 mt-4 animate-pulse">Iniciando sistema...</p>
+        </div>
+
+        <div class="w-full max-w-2xl relative z-20">
+            <div class="relative">
+                <div class="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                    <svg class="h-6 w-6 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                    </svg>
+                </div>
+                <input type="text" id="search-input" 
+                    class="block w-full pl-12 pr-4 py-4 bg-slate-800 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-xl shadow-lg transition-all" 
+                    placeholder="Digite as 3 primeiras letras do nome..." autocomplete="off">
+            </div>
+
+            <ul id="results-list" class="hidden absolute w-full bg-slate-800 border border-slate-700 rounded-xl mt-2 shadow-2xl max-h-96 overflow-y-auto z-50">
+                </ul>
+        </div>
+
+        <div class="mt-auto py-6 text-slate-600 text-sm">
+            Uso exclusivo da Segurança Patrimonial
+        </div>
+    </div>
+
+    <div id="card-status" class="hidden fixed inset-0 z-40 flex items-center justify-center p-4 bg-slate-900/90 backdrop-blur-sm">
+        <div class="bg-slate-800 rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden border border-slate-700 transform transition-all">
+            
+            <div id="status-header" class="w-full p-6 text-center bg-gray-600">
+                <div class="flex justify-center mb-2">
+                    <svg id="status-icon" class="h-16 w-16 text-white drop-shadow-md" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    </svg>
+                </div>
+                <h2 id="status-title" class="text-3xl font-black text-white tracking-wide drop-shadow-md">AGUARDANDO...</h2>
+            </div>
+
+            <div id="status-body" class="p-8">
+                </div>
+        </div>
+    </div>
+
+</body>
+</html>
