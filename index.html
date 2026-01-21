@@ -3399,83 +3399,107 @@ document.getElementById('form-fornecedor').addEventListener('submit', async e =>
                  } catch(err){ showNotification("Erro ao criar link.", "error"); }
              });
 
-             // Bulk Group
-             // Bulk Group - Abrir Modal e Preencher Status
+
+
+            // Bulk Group - Abrir Modal e Preencher Status/RN
 document.getElementById('btn-bulk-rn').addEventListener('click', () => {
-    // 1. Popula o select de status do modal de agrupamento
-    const selectAgrupar = document.querySelector('#form-agrupar select[name="status"]');
+    const f = document.getElementById('form-agrupar');
+    f.reset(); // Limpa dados anteriores
+
+    // 1. Tenta pegar dados do PRIMEIRO item selecionado para sugerir
+    if (state.selectedPedidos.length > 0) {
+        const firstId = state.selectedPedidos[0];
+        const firstItem = state.pedidos.find(p => p.id === firstId);
+        
+        if (firstItem) {
+            // Se o primeiro item já tem RN, sugere usar ela para agrupar os outros nela
+            if (firstItem.numRN) f.customRN.value = firstItem.numRN;
+            // Se o primeiro item já tem fornecedor, sugere ele
+            if (firstItem.fornecedor) f.fornecedor.value = firstItem.fornecedor;
+        }
+    }
+
+    // 2. Popula o select de status
+    const selectAgrupar = f.querySelector('select[name="status"]');
     if (selectAgrupar) {
         selectAgrupar.innerHTML = '';
         Object.entries(STATUS_MAP).forEach(([key, config]) => {
             selectAgrupar.innerHTML += `<option value="${key}">${config.text}</option>`;
         });
-        // Define um padrão sensato (ex: em-cotacao)
         selectAgrupar.value = 'em-cotacao';
     }
 
-    // 2. Abre o modal
+    // 3. Abre o modal
     document.getElementById('modal-agrupar').classList.remove('hidden');
 });
-             document.getElementById('form-agrupar').addEventListener('submit', async e => {
-                 e.preventDefault();
-                 const f = e.target;
-                 const fornecedor = f.fornecedor.value.trim(); 
-                 const statusToSet = f.status.value; 
-                 const files = f.fileBulkAttachments.files; // NOVO CAMPO
 
-                 if (!fornecedor) return showNotification("O campo Fornecedor é obrigatório.", "error");
-                 
-                 const btnSubmit = f.querySelector('button[type="submit"]');
-                 btnSubmit.disabled = true; btnSubmit.textContent = "...";
+// Listener de Salvar (Submit)
+document.getElementById('form-agrupar').addEventListener('submit', async e => {
+    e.preventDefault();
+    const f = e.target;
+    const fornecedor = f.fornecedor.value.trim(); 
+    const statusToSet = f.status.value; 
+    const files = f.fileBulkAttachments.files;
+    const customRN = f.customRN.value.trim(); // Pega o valor digitado
 
+    if (!fornecedor) return showNotification("O campo Fornecedor é obrigatório.", "error");
+    
+    const btnSubmit = f.querySelector('button[type="submit"]');
+    btnSubmit.disabled = true; btnSubmit.textContent = "...";
 
-                 // 1. Upload dos arquivos
-                 let uploadedUrls = [];
-                 try {
-                      for(let i=0; i < files.length; i++) {
-                          const file = files[i];
-                          const r = ref(storage, `artifacts/${appId}/bulk_docs/${Date.now()}_${file.name}`);
-                          await uploadBytes(r, file);
-                          const url = await getDownloadURL(r);
-                          uploadedUrls.push(url);
-                      }
-                 } catch (uploadError) {
-                      console.error("Erro no upload em lote:", uploadError);
-                      showNotification("Erro ao fazer upload dos orçamentos.", "error");
-                      btnSubmit.disabled = false; btnSubmit.textContent = "Aplicar em Lote";
-                      return;
-                 }
+    // 1. Define qual RN usar: A digitada OU gera uma aleatória se estiver vazio
+    const finalRN = customRN || String(Date.now()).slice(-8);
 
+    // 2. Upload dos arquivos (se houver)
+    let uploadedUrls = [];
+    try {
+        for(let i=0; i < files.length; i++) {
+            const file = files[i];
+            const r = ref(storage, `artifacts/${appId}/bulk_docs/${Date.now()}_${file.name}`);
+            await uploadBytes(r, file);
+            const url = await getDownloadURL(r);
+            uploadedUrls.push(url);
+        }
+    } catch (uploadError) {
+        console.error("Erro no upload em lote:", uploadError);
+        showNotification("Erro ao fazer upload.", "error");
+        btnSubmit.disabled = false; btnSubmit.textContent = "Aplicar em Lote";
+        return;
+    }
 
-                 // 2. Aplica as atualizações em lote nos pedidos selecionados
-                 // CORREÇÃO DE BUG: Gerar um numRN para forçar o agrupamento na tela principal
-                 const newRN = String(Date.now()).slice(-8); // RN temporário
-                 const batch = writeBatch(db);
-                 
-                 state.selectedPedidos.forEach(id => batch.update(doc(db, `artifacts/${appId}/public/data/pedidos`, id), { 
-                     fornecedor: fornecedor,
-                     status: statusToSet,
-                     numRN: newRN, // ATRIBUI RN para forçar o agrupamento
-                     urlBulkAnexos: uploadedUrls.length > 0 ? uploadedUrls : deleteField(), // Salva ou remove o array
-                     // Remove campos que não são mais definidos aqui
-                     numOC: deleteField(),
-                     dataAberturaRN: deleteField()
-                 }));
-                 
-                 await batch.commit();
-                 showNotification(`Grupo criado e ${state.selectedPedidos.length} pedidos agrupados na RN ${newRN}!`, "success");
-                 document.getElementById('modal-agrupar').classList.add('hidden');
-                 window.clearSelection(); // Limpa tudo corretamente
-             });
-             
-             // NEW: Bulk Ficha Cotação from selected items
-             document.getElementById('btn-bulk-ficha').addEventListener('click', () => {
-    if (state.selectedPedidos.length > 0) {
-        window.openCotacaoModal(state.selectedPedidos.join(','), false);
-        // Opcional: Limpar a seleção após abrir o modal
-        // window.clearSelection(); 
-    } else {
-        showNotification("Selecione pedidos para gerar a ficha.", "error");
+    // 3. Aplica as atualizações em lote usando a RN definida
+    const batch = writeBatch(db);
+    
+    state.selectedPedidos.forEach(id => {
+        const updatePayload = { 
+            fornecedor: fornecedor,
+            status: statusToSet,
+            numRN: finalRN, // Usa a RN definida (manual ou auto)
+            // Se tiver arquivos novos, atualiza, senão deleta o campo se for para limpar (opcional)
+            // Aqui mantemos a lógica de: se tem upload novo, salva.
+        };
+
+        if (uploadedUrls.length > 0) {
+            updatePayload.urlBulkAnexos = uploadedUrls;
+        }
+
+        // Limpa campos que poderiam conflitar
+        updatePayload.numOC = deleteField();
+        updatePayload.dataAberturaRN = deleteField();
+
+        batch.update(doc(db, `artifacts/${appId}/public/data/pedidos`, id), updatePayload);
+    });
+    
+    try {
+        await batch.commit();
+        showNotification(`Grupo criado/atualizado na RN ${finalRN}!`, "success");
+        document.getElementById('modal-agrupar').classList.add('hidden');
+        window.clearSelection();
+    } catch (err) {
+        console.error(err);
+        showNotification("Erro ao agrupar.", "error");
+    } finally {
+        btnSubmit.disabled = false; btnSubmit.textContent = "Aplicar em Lote";
     }
 });
         
@@ -4750,43 +4774,47 @@ document.getElementById('btn-bulk-rn').addEventListener('click', () => {
     
         <!-- Modal Agrupar (Vincular RN) -->
         <div id="modal-agrupar" class="relative z-50 hidden">
-            <div class="fixed inset-0 bg-gray-900/75 backdrop-blur-sm"></div>
-            <div class="fixed inset-0 z-10 flex items-center justify-center">
-                <div class="bg-white p-6 rounded-lg shadow-xl max-w-sm w-full">
-                    <h3 class="font-bold text-lg mb-4 text-gray-900">Criar Grupo em Lote</h3>
-                    <form id="form-agrupar" class="space-y-4">
-                        
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700">Fornecedor</label>
-                            <input list="fornecedores-datalist" name="fornecedor" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border" placeholder="Digite o nome do fornecedor">
-                            <datalist id="fornecedores-datalist"></datalist>
-                        </div>
-                        
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700">Status (Próximo Passo)</label>
-                            <select name="status" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-white">
-                                <!-- Opções Filtradas para o fluxo inicial de agrupamento -->
-                                <option value="em-cotacao">Em Cotação</option>
-                                <option value="registrado">Registrado</option>
-                                <option value="aguardando-entrega">Aguardando Entrega</option>
-                                <option value="entregue">Entregue</option>
-                            </select>
-                        </div>
-                        
-                        <!-- NOVO: Campo para anexar orçamentos em lote -->
-                        <div class="col-span-2">
-                            <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Anexar Orçamento (em Lote)</label>
-                            <input type="file" name="fileBulkAttachments" multiple class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100">
-                        </div>
-    
-                        <div class="flex justify-end gap-2 pt-2">
-                             <button type="button" onclick="document.getElementById('modal-agrupar').classList.add('hidden')" class="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50">Cancelar</button>
-                             <button type="submit" class="px-4 py-2 bg-primary-600 text-white rounded-md text-sm font-medium hover:bg-primary-700 shadow-sm">Aplicar em Lote</button>
-                        </div>
-                    </form>
+    <div class="fixed inset-0 bg-gray-900/75 backdrop-blur-sm"></div>
+    <div class="fixed inset-0 z-10 flex items-center justify-center">
+        <div class="bg-white p-6 rounded-lg shadow-xl max-w-sm w-full">
+            <h3 class="font-bold text-lg mb-4 text-gray-900">Criar Grupo em Lote</h3>
+            <form id="form-agrupar" class="space-y-4">
+                
+                <div>
+                    <label class="block text-sm font-bold text-gray-700">Definir Nº RN do Grupo</label>
+                    <input name="customRN" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border" placeholder="Ex: 2025001 (Deixe vazio para gerar auto)">
+                    <p class="text-xs text-gray-500 mt-1">Se preenchido, todos os itens selecionados assumirão este número.</p>
                 </div>
-            </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">Fornecedor</label>
+                    <input list="fornecedores-datalist" name="fornecedor" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border" placeholder="Digite o nome do fornecedor">
+                    <datalist id="fornecedores-datalist"></datalist>
+                </div>
+                
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">Status (Próximo Passo)</label>
+                    <select name="status" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-white">
+                        <option value="em-cotacao">Em Cotação</option>
+                        <option value="registrado">Registrado</option>
+                        <option value="aguardando-entrega">Aguardando Entrega</option>
+                        <option value="entregue">Entregue</option>
+                    </select>
+                </div>
+                
+                <div class="col-span-2">
+                    <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Anexar Orçamento (em Lote)</label>
+                    <input type="file" name="fileBulkAttachments" multiple class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-primary-600 file:text-primary-700 hover:file:bg-primary-100">
+                </div>
+
+                <div class="flex justify-end gap-2 pt-2">
+                    <button type="button" onclick="document.getElementById('modal-agrupar').classList.add('hidden')" class="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50">Cancelar</button>
+                    <button type="submit" class="px-4 py-2 bg-primary-600 text-white rounded-md text-sm font-medium hover:bg-primary-700 shadow-sm">Aplicar em Lote</button>
+                </div>
+            </form>
         </div>
+    </div>
+</div>
         
         <!-- NOVO MODAL: Confirmação Customizada -->
         <div id="modal-confirm" class="relative z-50 hidden">
