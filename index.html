@@ -704,8 +704,9 @@ function checkGroupSupplierLimit() {
                 <td class="px-3 py-4 text-sm text-gray-500">${item.modalidade || '-'}</td>
                 <td class="px-3 py-4 text-sm text-gray-500">${dSol.toLocaleDateString('pt-BR')}</td>
                 <td class="px-3 py-4 text-sm font-medium text-gray-900">
-                    <div class="text-xs text-gray-400 font-normal">${item.quantidade}x ${parseFloat(item.valorUnitario).toFixed(2)}</div>
-                    R$ ${parseFloat(item.valorTotal).toFixed(2)}
+                   <div class="text-xs text-gray-400 font-normal">
+    ${item.quantidade} ${item.unidadeMedida || 'Un'} x ${parseFloat(item.valorUnitario).toFixed(2)}
+</div>
                 </td>
                 <td class="px-3 py-4">
                     <span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${st.class}">${st.text}</span>
@@ -2845,6 +2846,23 @@ async function fetchFuncionarios() {
 
              // Datalist de fornecedores já preenchido pelo fetchFornecedores
 
+// Resetar para 'Un' se for novo
+f.unidadeMedida.value = 'Un'; 
+
+if(id) {
+    const p = state.pedidos.find(x=>x.id===id);
+    // ... código existente dos anexos ...
+    if(p) {
+         // ... outros campos (unidade, cr, projeto...) ...
+         
+         // ADICIONE ESTA LINHA PARA CARREGAR O DADO:
+         if(p.unidadeMedida) f.unidadeMedida.value = p.unidadeMedida;
+         
+         f.nomeProduto.value = p.nomeProduto; 
+         // ... resto dos campos
+    }
+}
+
              // Admin fields
              const adminArea = document.getElementById('modal-admin-area');
              if(currentUserProfile.perfil !== 'Solicitante') adminArea.classList.remove('hidden');
@@ -3044,18 +3062,35 @@ document.getElementById('btn-novo-fornecedor')?.addEventListener('click', () => 
                  btn.disabled = true; btn.textContent = "...";
                  try {
                      const data = {
-                          unidade: f.unidade.value, nomeDemandante: f.nomeDemandante.value,
-                          cr: f.cr.value, projeto: f.projeto.value,
-                          nomeProduto: f.nomeProduto.value, codigoProduto: f.codigoProduto.value, variacao: f.variacao.value,
-                          quantidade: parseFloat(f.quantidade.value), valorUnitario: parseFloat(f.valorUnitario.value), valorTotal: parseFloat(f.valorTotal.value),
-                          descricao: f.descricao.value, 
-                          // Admin fields
-                          modalidade: f.modalidade.value, grupoDeCompra: f.grupoDeCompra.value,
-                          numRN: f.numRN.value, numOC: f.numOC.value, status: f.status.value,
-                          dataAberturaRN: f.dataAberturaRN.value, dataPrevisao: f.dataPrevisao.value,
-                          fornecedor: f.fornecedor.value,
-                          segmento: f.segmento.value 
-                     };
+            unidade: f.unidade.value, 
+            nomeDemandante: f.nomeDemandante.value,
+            cr: f.cr.value, 
+            projeto: f.projeto.value,
+            
+            // --- NOVA LINHA AQUI ---
+            // O 'f' representa o formulário, e 'unidadeMedida' é o 'name' que demos no HTML
+            unidadeMedida: f.unidadeMedida.value, // <<<<< ADICIONE ESTA LINHA
+            // -----------------------
+
+            nomeProduto: f.nomeProduto.value, 
+            codigoProduto: f.codigoProduto.value, 
+            variacao: f.variacao.value,
+            quantidade: parseFloat(f.quantidade.value), 
+            valorUnitario: parseFloat(f.valorUnitario.value), 
+            valorTotal: parseFloat(f.valorTotal.value),
+            descricao: f.descricao.value,
+            
+            // ... restante dos campos (modalidade, numRN, status, etc.)
+            modalidade: f.modalidade.value, 
+            grupoDeCompra: f.grupoDeCompra.value,
+            numRN: f.numRN.value, 
+            numOC: f.numOC.value, 
+            status: f.status.value,
+            dataAberturaRN: f.dataAberturaRN.value, 
+            dataPrevisao: f.dataPrevisao.value,
+            fornecedor: f.fornecedor.value,
+            segmento: f.segmento.value
+        };
                      
                      // NOVO: TRATAMENTO DE UPLOADS MÚLTIPLOS (Anexar arquivos)
                      let uploadedUrls = [];
@@ -4454,20 +4489,38 @@ document.getElementById('btn-bulk-rn').addEventListener('click', () => {
                             </div>
                             <div class="col-span-8"></div>
 
-                            <div class="col-span-8 grid grid-cols-3 gap-4">
-                                <div>
-                                    <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Qtd</label>
-                                    <input type="number" id="inp-qtd" name="quantidade" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                                </div>
-                                <div>
-                                    <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Valor Unit.</label>
-                                    <input type="number" step="0.01" id="inp-val" name="valorUnitario" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                                </div>
-                                <div class="col-span-3">
-                                    <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Valor Total</label>
-                                    <input type="number" id="inp-tot" name="valorTotal" readonly class="block w-full rounded-md border-gray-300 bg-gray-100 shadow-sm sm:text-sm p-2 border cursor-not-allowed font-bold text-gray-700">
-                                </div>
-                            </div>
+                            <div class="col-span-8 grid grid-cols-4 gap-4">
+    
+    <div>
+        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Un. Medida</label>
+        <select name="unidadeMedida" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-white">
+            <option value="Un">Un (Unidade)</option>
+            <option value="Kg">Kg (Quilo)</option>
+            <option value="L">L (Litro)</option>
+            <option value="m">m (Metro)</option>
+            <option value="m²">m² (Metro Quad.)</option>
+            <option value="cx">Cx (Caixa)</option>
+            <option value="pct">Pct (Pacote)</option>
+            <option value="fardo">Fardo</option>
+            <option value="par">Par</option>
+            <option value="galão">Galão</option>
+            <option value="jogo">Jogo/Kit</option>
+        </select>
+    </div>
+
+    <div>
+        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Qtd</label>
+        <input type="number" id="inp-qtd" name="quantidade" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+    </div>
+    <div>
+        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Valor Unit.</label>
+        <input type="number" step="0.01" id="inp-val" name="valorUnitario" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+    </div>
+    <div>
+        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Valor Total</label>
+        <input type="number" id="inp-tot" name="valorTotal" readonly class="block w-full rounded-md border-gray-300 bg-gray-100 shadow-sm sm:text-sm p-2 border cursor-not-allowed font-bold text-gray-700">
+    </div>
+</div>
 
                             <div class="col-span-12">
                                 <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Observações</label>
