@@ -1733,6 +1733,7 @@ window.closeAttachmentsModal = () => {
             f.dataEmissao.value = refItem.dataEmissao || '';
             f.dataVcto.value = refItem.dataVcto || '';
             f.modalidadeNF.value = modalidadeNF; // Usa a modalidade do item/grupo
+            f.obsNF.value = refItem.obsNF || '';
             
             // Data do Dia (Preenche com a data de hoje por padrão)
             const today = new Date().toISOString().split('T')[0];
@@ -2010,6 +2011,9 @@ window.openSupplierAttachments = (id) => {
                     if (f.fin.value) updateData.fin = f.fin.value;
                     if (f.dataEmissao.value) updateData.dataEmissao = f.dataEmissao.value;
                     if (f.dataVcto.value) updateData.dataVcto = f.dataVcto.value;
+                    
+
+                    updateData.obsNF = f.obsNF.value;
                     // updateData.modalidade não salvamos no pedido geralmente, é propriedade do item, 
                     // mas se quiser salvar a correção:
                     // updateData.modalidade = f.modalidadeNF.value; 
@@ -4210,33 +4214,38 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
     
                         <!-- Campos Financeiros - Visível apenas para Aquisições/Admin -->
                         <div id="nf-admin-fields" class="space-y-4 border-t border-gray-200 pt-4 hidden">
-                             <h4 class="text-xs font-bold text-gray-500 uppercase tracking-wider">Dados Financeiros (NF)</h4>
-                             <div class="grid grid-cols-2 gap-4">
-                                 <div class="col-span-2">
-                                     <label class="block text-xs font-medium text-gray-700 mb-1">Data do Dia (Referência de Competência)</label>
-                                     <input name="dataDoDia" id="data-do-dia" type="date" required class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                                 </div>
-                                 <div>
-                                     <label class="block text-xs font-medium text-gray-700 mb-1">FIN</label>
-                                     <input name="fin" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                                 </div>
-                                 <div>
-                                     <label class="block text-xs font-medium text-gray-700 mb-1">Modalidade NF</label>
-                                     <select name="modalidadeNF" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-white">
-                                         <option value="Produto">Produto</option>
-                                         <option value="Serviço">Serviço</option>
-                                     </select>
-                                 </div>
-                                 <div>
-                                     <label class="block text-xs font-medium text-gray-700 mb-1">Data Emissão NF</label>
-                                     <input name="dataEmissao" type="date" required class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                                 </div>
-                                 <div>
-                                     <label class="block text-xs font-medium text-gray-700 mb-1">Data Vcto</label>
-                                     <input name="dataVcto" type="date" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-                                 </div>
-                             </div>
-                        </div>
+    <h4 class="text-xs font-bold text-gray-500 uppercase tracking-wider">Dados Financeiros (NF)</h4>
+    <div class="grid grid-cols-2 gap-4">
+        <div class="col-span-2">
+            <label class="block text-xs font-medium text-gray-700 mb-1">Data do Dia (Referência de Competência)</label>
+            <input name="dataDoDia" id="data-do-dia" type="date" required class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+        </div>
+        <div>
+            <label class="block text-xs font-medium text-gray-700 mb-1">FIN</label>
+            <input name="fin" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+        </div>
+        <div>
+            <label class="block text-xs font-medium text-gray-700 mb-1">Modalidade NF</label>
+            <select name="modalidadeNF" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-white">
+                <option value="Produto">Produto</option>
+                <option value="Serviço">Serviço</option>
+            </select>
+        </div>
+        <div>
+            <label class="block text-xs font-medium text-gray-700 mb-1">Data Emissão NF</label>
+            <input name="dataEmissao" type="date" required class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+        </div>
+        <div>
+            <label class="block text-xs font-medium text-gray-700 mb-1">Data Vcto</label>
+            <input name="dataVcto" type="date" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+        </div>
+        
+        <div class="col-span-2">
+            <label class="block text-xs font-medium text-gray-700 mb-1">Observações da Nota / Entrega</label>
+            <textarea name="obsNF" rows="2" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border" placeholder="Ex: Entrega parcial, pendente boleto..."></textarea>
+        </div>
+        </div>
+</div>
                         
                         <div>
                             <label class="block text-sm font-medium text-gray-700 mb-1">Arquivo da NF</label>
