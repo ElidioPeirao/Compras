@@ -1068,6 +1068,123 @@ window.validateServiceEmployee = () => {
         };
 
 
+
+        window.openRelatorioMensal = () => {
+    const tbody = document.getElementById('tabela-relatorio-body');
+    const summary = document.getElementById('relatorio-summary');
+    tbody.innerHTML = '';
+    
+    // Objeto para agrupar os dados: { "2025-10": { total: 0, foraNP: 0, ... } }
+    const reportData = {};
+    let grandTotal = 0;
+    let grandForaNP = 0;
+    let grandForaComp = 0;
+
+    // Filtra apenas pedidos que têm NF anexada
+    const pedidosComNF = state.pedidos.filter(p => !!p.urlNotaFiscal);
+
+    pedidosComNF.forEach(p => {
+        // Usa dataDoDia (data de anexo/recebimento) como referência para o mês do relatório
+        // Se não tiver dataDoDia, usa dataEmissao como fallback
+        const refDateStr = p.dataDoDia || p.dataEmissao;
+        if (!refDateStr) return;
+
+        const refDate = new Date(refDateStr + 'T00:00:00');
+        // Chave de agrupamento: YYYY-MM
+        const key = `${refDate.getFullYear()}-${String(refDate.getMonth() + 1).padStart(2, '0')}`;
+
+        if (!reportData[key]) {
+            reportData[key] = {
+                monthObj: refDate,
+                count: 0,
+                foraNP: 0,
+                foraComp: 0,
+                comObs: 0,
+                valorTotal: 0
+            };
+        }
+
+        const entry = reportData[key];
+        entry.count++;
+        entry.valorTotal += parseFloat(p.valorTotal || 0);
+        if (p.obsNF) entry.comObs++;
+
+        // --- LÓGICA DE COMPLIANCE (Replicada) ---
+        // 1. Fora NP (Dia 27+)
+        if (refDate.getDate() >= 27) {
+            entry.foraNP++;
+            grandForaNP++;
+        }
+
+        // 2. Fora Competência
+        if (p.dataEmissao) {
+            const emissaoDate = new Date(p.dataEmissao + 'T00:00:00');
+            // Calcula "número absoluto do mês": Ano * 12 + Mês
+            const refMonthAbs = refDate.getFullYear() * 12 + refDate.getMonth();
+            const emissaoMonthAbs = emissaoDate.getFullYear() * 12 + emissaoDate.getMonth();
+            
+            // Se o mês do recebimento for maior que o mês da emissão
+            if (refMonthAbs > emissaoMonthAbs) {
+                entry.foraComp++;
+                grandForaComp++;
+            }
+        }
+        
+        grandTotal++;
+    });
+
+    // Ordenar chaves (Mês mais recente primeiro)
+    const sortedKeys = Object.keys(reportData).sort().reverse();
+
+    // Renderizar Tabela
+    if (sortedKeys.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="6" class="p-4 text-center text-gray-500">Nenhum dado de NF encontrado.</td></tr>`;
+    } else {
+        sortedKeys.forEach(key => {
+            const d = reportData[key];
+            const mesExtenso = d.monthObj.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+            
+            // Formatar valor
+            const valorFmt = d.valorTotal.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
+            tbody.innerHTML += `
+                <tr class="hover:bg-gray-50 border-b border-gray-100">
+                    <td class="px-4 py-3 text-sm font-bold text-gray-900 capitalize">${mesExtenso}</td>
+                    <td class="px-4 py-3 text-center text-sm text-gray-700 bg-blue-50 font-bold">${d.count}</td>
+                    <td class="px-4 py-3 text-center text-sm ${d.foraNP > 0 ? 'text-orange-600 font-bold bg-orange-50' : 'text-gray-400'}">${d.foraNP}</td>
+                    <td class="px-4 py-3 text-center text-sm ${d.foraComp > 0 ? 'text-red-600 font-bold bg-red-50' : 'text-gray-400'}">${d.foraComp}</td>
+                    <td class="px-4 py-3 text-center text-sm text-gray-600">${d.comObs}</td>
+                    <td class="px-4 py-3 text-right text-sm font-mono text-gray-700">${valorFmt}</td>
+                </tr>
+            `;
+        });
+    }
+
+    // Renderizar Summary Cards
+    const complianceRate = grandTotal > 0 ? ((1 - ((grandForaNP + grandForaComp) / grandTotal)) * 100).toFixed(1) : 100;
+    
+    summary.innerHTML = `
+        <div class="bg-blue-50 p-4 rounded-lg border border-blue-100">
+            <div class="text-xs font-bold text-blue-500 uppercase">Total Recebidas</div>
+            <div class="text-2xl font-bold text-blue-700">${grandTotal}</div>
+        </div>
+        <div class="bg-orange-50 p-4 rounded-lg border border-orange-100">
+            <div class="text-xs font-bold text-orange-500 uppercase">Total Fora NP</div>
+            <div class="text-2xl font-bold text-orange-700">${grandForaNP}</div>
+        </div>
+        <div class="bg-red-50 p-4 rounded-lg border border-red-100">
+            <div class="text-xs font-bold text-red-500 uppercase">Total Fora Comp.</div>
+            <div class="text-2xl font-bold text-red-700">${grandForaComp}</div>
+        </div>
+        <div class="bg-green-50 p-4 rounded-lg border border-green-100">
+            <div class="text-xs font-bold text-green-500 uppercase">Taxa Compliance</div>
+            <div class="text-2xl font-bold text-green-700">${complianceRate}%</div>
+        </div>
+    `;
+
+    document.getElementById('modal-relatorio').classList.remove('hidden');
+};
+
 // --- LÓGICA DE FUNCIONÁRIOS ---
 
 // Abrir Modal
@@ -3848,13 +3965,18 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
       <div id="gestao-nf" class="page-content hidden w-full">
     <div class="flex justify-between items-center mb-6">
         <h2 class="text-2xl font-bold text-gray-900">Gestão de Nota Fiscal</h2>
+        <button onclick="openRelatorioMensal()" class="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 focus:outline-none">
+            <svg class="mr-2 -ml-1 h-5 w-5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            Relatório Mensal
+        </button>
         <select id="filter-nf-status" class="block w-56 rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-white">
             <option value="aguardando-entrega">Aguardando Entrega</option>
             <option value="entregue">Notas Entregue</option>
             <option value="fora-np">⚠️ Fora da NP (Dia 27-31)</option>
             <option value="fora-competencia">⛔ Fora da Competência</option>
             <option value="com-obs">📝 Com Observação</option>
-            <option value="pendente" selected>Aguardando Nota (Sem NF)</option>
         </select>
     </div>
 
@@ -4879,7 +5001,47 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
             </div>
         </div>
 
+<div id="modal-relatorio" class="relative z-50 hidden">
+    <div class="fixed inset-0 bg-gray-900/75 backdrop-blur-sm transition-opacity"></div>
+    <div class="fixed inset-0 z-10 overflow-y-auto">
+        <div class="flex min-h-full items-center justify-center p-4 text-center sm:p-0">
+            <div class="relative transform overflow-hidden rounded-lg bg-white text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-5xl">
+                <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                    <div class="flex justify-between items-center mb-6 border-b pb-4">
+                        <h3 class="text-xl font-bold text-gray-900">Relatório Mensal de Recebimento de NF</h3>
+                        <button onclick="document.getElementById('modal-relatorio').classList.add('hidden')" class="text-gray-400 hover:text-gray-500">
+                            <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+                        </button>
+                    </div>
 
+                    <div id="relatorio-summary" class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                        </div>
+
+                    <div class="overflow-hidden rounded-lg border border-gray-200">
+                        <table class="min-w-full divide-y divide-gray-200">
+                            <thead class="bg-gray-100">
+                                <tr>
+                                    <th class="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase">Mês / Ano</th>
+                                    <th class="px-4 py-3 text-center text-xs font-bold text-gray-500 uppercase">Total Recebidas</th>
+                                    <th class="px-4 py-3 text-center text-xs font-bold text-gray-500 uppercase text-orange-600">Fora NP (27-31)</th>
+                                    <th class="px-4 py-3 text-center text-xs font-bold text-gray-500 uppercase text-red-600">Fora Competência</th>
+                                    <th class="px-4 py-3 text-center text-xs font-bold text-gray-500 uppercase">Com Observação</th>
+                                    <th class="px-4 py-3 text-right text-xs font-bold text-gray-500 uppercase">Valor Total (R$)</th>
+                                </tr>
+                            </thead>
+                            <tbody id="tabela-relatorio-body" class="bg-white divide-y divide-gray-200">
+                                </tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="bg-gray-50 px-4 py-3 sm:flex sm:flex-row-reverse sm:px-6">
+                    <button type="button" onclick="document.getElementById('modal-relatorio').classList.add('hidden')" class="mt-3 inline-flex w-full justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-base font-medium text-gray-700 shadow-sm hover:bg-gray-50 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">Fechar</button>
+                    <button type="button" onclick="window.print()" class="inline-flex w-full justify-center rounded-md border border-transparent bg-primary-600 px-4 py-2 text-base font-medium text-white shadow-sm hover:bg-primary-700 sm:ml-3 sm:w-auto sm:text-sm">Imprimir Relatório</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
     
     
     </body>
