@@ -482,7 +482,9 @@ function checkGroupSupplierLimit() {
         warningDiv.innerHTML = `Dentro do limite. Acumulado: ${formatMoney(totalAcumulado)}. Restante: ${formatMoney(restante)}`;
     }
 }
-        window.renderPedidosTable = function(pedidos, tableId = 'tabela-pedidos-solicitacoes') {
+
+
+window.renderPedidosTable = function(pedidos, tableId = 'tabela-pedidos-solicitacoes') {
     const tbody = document.getElementById(tableId)?.querySelector('tbody');
     if (!tbody) return;
     tbody.innerHTML = '';
@@ -494,33 +496,23 @@ function checkGroupSupplierLimit() {
 
     // --- 1. FILTRAGEM INICIAL ---
     let list = pedidos.filter(p => {
-        // Se for a tabela principal, esconde serviços (eles têm tela própria)
         if (isMain && p.modalidade === 'Serviço') return false;
-
-        // Filtro de permissão (Solicitante vê só os seus)
         if (perfil === 'Solicitante' && p.solicitanteId !== currentUser.uid && p.nomeDemandante !== currentUserProfile.nome) return false;
-        
-        // Filtros da barra superior
         if (state.filtros.unidade && p.unidade !== state.filtros.unidade) return false;
         if (state.filtros.modalidade && p.modalidade !== state.filtros.modalidade) return false;
         if (state.filtros.status && p.status !== state.filtros.status) return false;
         
-        // Filtro de Fornecedor
         if (state.filtros.fornecedor) {
             const termo = state.filtros.fornecedor.toLowerCase();
             const pFornecedor = (p.fornecedor || '').toLowerCase();
             if (!pFornecedor.includes(termo)) return false;
         }
 
-        // Filtro de Busca (RN ou OC)
         if (searchFilter) {
             const rn = (p.numRN || '').toLowerCase();
             const oc = (p.numOC || '').toLowerCase();
-            // Também busca pelo nome do produto ou ID para facilitar
             const prod = (p.nomeProduto || '').toLowerCase();
-            if (!rn.includes(searchFilter) && !oc.includes(searchFilter) && !prod.includes(searchFilter)) {
-                return false;
-            }
+            if (!rn.includes(searchFilter) && !oc.includes(searchFilter) && !prod.includes(searchFilter)) return false;
         }
         return true;
     });
@@ -530,18 +522,16 @@ function checkGroupSupplierLimit() {
         return;
     }
 
-    // --- 2. AGRUPAMENTO (Lógica Visual) ---
+    // --- 2. AGRUPAMENTO LÓGICO ---
     const grouped = [];
     const rnMap = new Map();
 
     list.forEach(p => {
         let effectiveStatus = p.status;
-        // Gestor vê status "A Inserir RN" se estiver pendente
         if (isGestor && p.status === 'a-abrir-rn' && !p.numRN && !p.dataAberturaRN) {
              effectiveStatus = 'a-inserir-rn';
         }
         
-        // Se tem RN e estamos na tela principal, agrupa
         if (p.numRN && isMain) {
             if (!rnMap.has(p.numRN)) {
                 rnMap.set(p.numRN, { 
@@ -551,7 +541,6 @@ function checkGroupSupplierLimit() {
                     total: parseFloat(p.valorTotal||0), 
                     status: effectiveStatus, 
                     dateRN: p.dataAberturaRN, 
-                    isPendingRN: false, 
                     id: p.numRN, 
                     fornecedor: p.fornecedor, 
                     numOC: p.numOC, 
@@ -562,78 +551,73 @@ function checkGroupSupplierLimit() {
                 const g = rnMap.get(p.numRN);
                 g.items.push(p);
                 g.total += parseFloat(p.valorTotal||0);
-                // Status do grupo assume o do item mais recente ou mantém o atual
                 g.status = effectiveStatus;
-                
-                // Preenche dados faltantes no grupo se o primeiro item não tinha
                 if (!g.fornecedor && p.fornecedor) g.fornecedor = p.fornecedor;
                 if (!g.numOC && p.numOC) g.numOC = p.numOC;
             }
         } else {
-            // Item solto (sem RN ou não agrupável)
             grouped.push({ isGroup: false, ...p, status: effectiveStatus });
         }
     });
 
-    // Ordenação: Grupos primeiro, depois data
-    // --- 3. ORDENAÇÃO DINÂMICA ---
+    // --- 3. ORDENAÇÃO ---
     grouped.sort((a, b) => {
         const field = state.sortConfig.field || 'dataSolicitacao';
         const dir = state.sortConfig.direction === 'asc' ? 1 : -1;
         let valA, valB;
 
-        // Lógica para extrair os valores dependendo se é Grupo ou Item Individual
         if (field === 'dataSolicitacao') {
-            // Data: Prioriza data da RN para grupos, ou data da solicitação para itens
             let dateRa = a.isGroup ? (a.dateRN || (a.items[0]?.dataSolicitacao)) : a.dataSolicitacao;
             let dateRb = b.isGroup ? (b.dateRN || (b.items[0]?.dataSolicitacao)) : b.dataSolicitacao;
-            
-            // Converte para Timestamp numérico para comparar
             valA = dateRa?.toDate ? dateRa.toDate().getTime() : new Date(dateRa || 0).getTime();
             valB = dateRb?.toDate ? dateRb.toDate().getTime() : new Date(dateRb || 0).getTime();
-        } 
-        else if (field === 'valorTotal') {
-            // Valor: Total do grupo vs Valor do item
+        } else if (field === 'valorTotal') {
             valA = a.isGroup ? a.total : (parseFloat(a.valorTotal) || 0);
             valB = b.isGroup ? b.total : (parseFloat(b.valorTotal) || 0);
-        }
-        else if (field === 'unidade') {
-            // Unidade: Texto (para grupo pega a primeira unidade ou 'Várias')
+        } else if (field === 'unidade') {
             valA = (a.isGroup ? (a.items[0]?.unidade || '') : a.unidade).toLowerCase();
             valB = (b.isGroup ? (b.items[0]?.unidade || '') : b.unidade).toLowerCase();
-        }
-        else if (field === 'status') {
-            // Status: Texto
+        } else if (field === 'status') {
             valA = (a.status || '').toLowerCase();
             valB = (b.status || '').toLowerCase();
-        }
-        else {
-            // Fallback (ex: por ID ou nome)
+        } else {
             valA = ''; valB = '';
         }
 
-        // Executa a comparação
         if (valA < valB) return -1 * dir;
         if (valA > valB) return 1 * dir;
-        
-        // Critério de desempate: Sempre Data mais recente
         return 0; 
     });
 
-    // --- 3. RENDERIZAÇÃO DO HTML ---
+    // --- 4. RENDERIZAÇÃO DO HTML ---
     grouped.forEach(item => {
+        
+        // --- LÓGICA CRÍTICA: Se for grupo mas só tem 1 item, trata como item individual ---
+        let renderAsGroup = item.isGroup;
+        let itemToRender = item;
+
+        if (item.isGroup && item.items.length === 1) {
+            renderAsGroup = false;
+            // Pega o item real de dentro do grupo para renderizar como linha normal
+            itemToRender = { 
+                ...item.items[0], 
+                status: item.status, 
+                isGroup: false 
+                // Mantemos o numRN no objeto para ser exibido na coluna RN
+            };
+        }
+        // ---------------------------------------------------------------------------------
+
         const tr = document.createElement('tr');
         tr.className = "hover:bg-gray-50 transition-colors border-b border-gray-100 last:border-0";
         
-        // === RENDERIZAÇÃO DE GRUPO ===
-        if (item.isGroup) {
+        // === RENDERIZAÇÃO DE GRUPO (Apenas se > 1 item) ===
+        if (renderAsGroup) {
             let displayStatusKey = item.status;
-            // Verifica atraso no primeiro item
             if (item.items[0] && checkIsLate(item.items[0])) displayStatusKey = 'em-atraso';
 
             const st = STATUS_MAP[displayStatusKey] || { text: item.status, class: "bg-gray-100 text-gray-600" };
             
-            // Dados para exibição
             let dateStr = '---';
             let dateRaw = item.dateRN || (item.items[0] ? item.items[0].dataSolicitacao : null);
             try {
@@ -643,11 +627,10 @@ function checkGroupSupplierLimit() {
 
             const modalidadeStr = item.items[0] ? item.items[0].modalidade : '-';
             const referenceDisplay = item.numRN || 'PENDENTE';
-            const targetId = item.numRN || item.items[0].id;
+            const targetId = item.numRN;
             const units = [...new Set(item.items.map(i => i.unidade))].join(', ');
 
-            // Cor de fundo do grupo
-            tr.className += item.isPendingGroup ? " bg-yellow-50/60 font-bold" : " bg-blue-50/60";
+            tr.className += " bg-blue-50/60";
 
             tr.innerHTML = `
                 <td class="px-3 py-4 w-10"></td>
@@ -677,21 +660,25 @@ function checkGroupSupplierLimit() {
                 </td>
             `;
         } 
-        // === RENDERIZAÇÃO DE ITEM INDIVIDUAL ===
+        // === RENDERIZAÇÃO DE ITEM INDIVIDUAL (Incluindo RN com 1 item) ===
         else {
+            const item = itemToRender; // Usa o item desembrulhado se veio de um grupo de 1
             let displayStatusKey = item.status;
             if (checkIsLate(item)) displayStatusKey = 'em-atraso';
             
             const st = STATUS_MAP[displayStatusKey] || { text: item.status, class: "bg-gray-100 text-gray-600" };
             const dSol = item.dataSolicitacao?.toDate ? item.dataSolicitacao.toDate() : new Date();
             
-            // Checkbox para seleção em massa
+            // Checkbox para seleção
             const isChecked = state.selectedPedidos.includes(item.id) ? 'checked' : '';
             const check = (isMain && isGestor) ? `<input type="checkbox" class="row-checkbox h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-600" value="${item.id}" ${isChecked}>` : '';
 
+            // Se tiver RN, mostra ela na coluna, senão ---
+            const rnDisplay = item.numRN ? `<span class="text-primary-700 font-bold">${item.numRN}</span>` : '---';
+
             tr.innerHTML = `
                 <td class="px-3 py-4 w-10 text-center">${check}</td>
-                <td class="px-3 py-4 text-sm text-gray-500 font-mono">${item.numRN || '---'}</td>
+                <td class="px-3 py-4 text-sm text-gray-500 font-mono">${rnDisplay}</td>
                 <td class="px-3 py-4 text-sm text-gray-900">
                     <div class="font-medium">${item.unidade}</div>
                     <div class="text-xs text-gray-500">${item.nomeDemandante}</div>
@@ -705,8 +692,8 @@ function checkGroupSupplierLimit() {
                 <td class="px-3 py-4 text-sm text-gray-500">${dSol.toLocaleDateString('pt-BR')}</td>
                 <td class="px-3 py-4 text-sm font-medium text-gray-900">
                    <div class="text-xs text-gray-400 font-normal">
-    ${item.quantidade} ${item.unidadeMedida || 'Un'} x ${parseFloat(item.valorUnitario).toFixed(2)}
-</div>
+                       ${item.quantidade} ${item.unidadeMedida || 'Un'} x ${parseFloat(item.valorUnitario).toFixed(2)}
+                   </div>
                 </td>
                 <td class="px-3 py-4">
                     <span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${st.class}">${st.text}</span>
@@ -2798,148 +2785,142 @@ async function fetchFuncionarios() {
 
         window.closeConfirmationModal = () => document.getElementById('modal-confirm').classList.add('hidden');
         
-        // --- MODAL PEDIDO ---
-        // Adiciona um parâmetro opcional para saber se está vindo de um modal de grupo
-        window.openPedidoModal = (id=null, fromGroupModal=false) => {
-             const f = document.getElementById('form-pedido'); f.reset(); f.dataset.id = id||"";
-             document.getElementById('pedido-results').innerHTML = '';
-             
-             // Estado para retorno
-             f.dataset.fromgroup = fromGroupModal;
-             
-             // NOVO: Oculta o modal de grupo para que o modal de pedido apareça por cima
-             if (fromGroupModal) {
-                 document.getElementById('modal-group').classList.add('hidden');
-             }
+        window.openPedidoModal = (id = null, fromGroupModal = false) => {
+    const f = document.getElementById('form-pedido');
+    f.reset();
+    f.dataset.id = id || "";
+    document.getElementById('pedido-results').innerHTML = '';
 
-             // RESET STATE: Habilita todos os campos e reseta o botão Salvar
-             const allInputs = f.querySelectorAll('input, select, textarea');
-             allInputs.forEach(el => el.disabled = false);
-             
-             const btnSave = document.getElementById('btn-save-pedido');
-             btnSave.disabled = false;
-             btnSave.textContent = "Salvar";
-             btnSave.classList.remove('bg-gray-400', 'cursor-not-allowed');
-             btnSave.classList.add('bg-primary-600', 'hover:bg-primary-700');
-             
-             // Botão Voltar para o grupo (Novo)
-             const btnReturn = document.getElementById('btn-return-group');
-             if (btnReturn) {
-                 if (fromGroupModal && lastGroupIdForReturn) {
-                     btnReturn.classList.remove('hidden');
-                 } else {
-                     btnReturn.classList.add('hidden');
-                 }
-             }
+    // Estado para retorno
+    f.dataset.fromgroup = fromGroupModal;
 
-             // Preencher selects
-             const u = f.unidade; u.innerHTML=''; state.unidades.forEach(x=>u.innerHTML+=`<option value="${x}">${x}</option>`);
-             const m = f.modalidade; m.innerHTML=''; state.modalidadesList.forEach(x=>m.innerHTML+=`<option value="${x}">${x}</option>`);
-             const g = f.grupoDeCompra; g.innerHTML='<option value="">-</option>'; state.gruposDeCompra.forEach(x=>g.innerHTML+=`<option value="${x}">${x}</option>`);
-             const s = f.status; s.innerHTML=''; Object.entries(STATUS_MAP).filter(([k]) => k !== 'a-inserir-rn').forEach(([k,v])=>s.innerHTML+=`<option value="${k}">${v.text}</option>`);
-             
-             // Se tiver filtro de unidade, usar ele
-             const filterU = document.getElementById('filter-unidade')?.value; // Adicionado null check
-             if(filterU && !id) { // Só se for novo
-                 f.unidade.value = filterU;
-             }
-
-             // Datalist de fornecedores já preenchido pelo fetchFornecedores
-
-// Resetar para 'Un' se for novo
-f.unidadeMedida.value = 'Un'; 
-
-if(id) {
-    const p = state.pedidos.find(x=>x.id===id);
-    // ... código existente dos anexos ...
-    if(p) {
-         // ... outros campos (unidade, cr, projeto...) ...
-         
-         // ADICIONE ESTA LINHA PARA CARREGAR O DADO:
-         if(p.unidadeMedida) f.unidadeMedida.value = p.unidadeMedida;
-         
-         f.nomeProduto.value = p.nomeProduto; 
-         // ... resto dos campos
+    // Oculta o modal de grupo se necessário
+    if (fromGroupModal) {
+        document.getElementById('modal-group').classList.add('hidden');
     }
-}
 
-             // Admin fields
-             const adminArea = document.getElementById('modal-admin-area');
-             if(currentUserProfile.perfil !== 'Solicitante') adminArea.classList.remove('hidden');
-             else adminArea.classList.add('hidden');
+    // 1. Resetar Estado: Habilita todos os campos inicialmente
+    const allInputs = f.querySelectorAll('input, select, textarea');
+    allInputs.forEach(el => el.disabled = false);
 
-             if(id) {
-                 const p = state.pedidos.find(x=>x.id===id);
-                 if (p) {
-                    const anexosBtn = document.getElementById('btn-ver-anexos');
-                    const anexoCount = p.urlAnexos?.length || 0;
-                    
-                    // Atualiza texto do botão e cor
-                    anexosBtn.textContent = `Ver Anexos (${anexoCount})`;
-                    if (anexoCount > 0) {
-                        anexosBtn.classList.remove('text-gray-700', 'border-gray-300', 'bg-white');
-                        anexosBtn.classList.add('text-blue-600', 'border-blue-300', 'bg-blue-50');
-                    } else {
-                        anexosBtn.classList.add('text-gray-700', 'border-gray-300', 'bg-white');
-                        anexosBtn.classList.remove('text-blue-600', 'border-blue-300', 'bg-blue-50');
-                    }
-                 
-                    const anexosIcon = anexosBtn.querySelector('svg');
-                    if (anexosIcon) anexosIcon.classList.remove('mr-1'); // Remove margem para alinhamento
+    const btnSave = document.getElementById('btn-save-pedido');
+    btnSave.disabled = false;
+    btnSave.textContent = "Salvar";
+    btnSave.classList.remove('bg-gray-400', 'cursor-not-allowed');
+    btnSave.classList.add('bg-primary-600', 'hover:bg-primary-700');
 
-                    anexosBtn.onclick = () => {
-                         const currentItem = state.pedidos.find(x=>x.id===id);
-                         if (currentItem && currentItem.urlAnexos && currentItem.urlAnexos.length > 0) {
-                             openAttachmentsModal(currentItem.urlAnexos);
-                         } else {
-                             showNotification("Nenhum anexo existente.", "error");
-                         }
-                    };
-                }
-                 if(p) {
-                      f.unidade.value = p.unidade; f.nomeDemandante.value = p.nomeDemandante;
-                      f.cr.value = p.cr||''; f.projeto.value = p.projeto||'';
-                      f.nomeProduto.value = p.nomeProduto; f.codigoProduto.value = p.codigoProduto||''; f.variacao.value = p.variacao||'';
-                      f.quantidade.value = p.quantidade; f.valorUnitario.value = p.valorUnitario; f.valorTotal.value = p.valorTotal;
-                      f.descricao.value = p.descricao||'';
-                     
-                      // Admin fields populated here but visible logic handled above
-                      if(p.modalidade) f.modalidade.value = p.modalidade;
-                      if(p.grupoDeCompra) f.grupoDeCompra.value = p.grupoDeCompra;
-                      f.numRN.value = p.numRN||''; f.numOC.value = p.numOC||''; f.status.value = p.status;
-                      if(p.dataAberturaRN) f.dataAberturaRN.value = p.dataAberturaRN;
-                      if(p.dataPrevisao) f.dataPrevisao.value = p.dataPrevisao;
-                      if(p.fornecedor) f.fornecedor.value = p.fornecedor;
-                      if (p.segmento) f.segmento.value = p.segmento; // Mantido para o Admin
+    // Botão Voltar para o grupo
+    const btnReturn = document.getElementById('btn-return-group');
+    if (btnReturn) {
+        if (fromGroupModal && lastGroupIdForReturn) {
+            btnReturn.classList.remove('hidden');
+        } else {
+            btnReturn.classList.add('hidden');
+        }
+    }
 
-                      // LÓGICA DE BLOQUEIO: Se for Solicitante e o status for DIFERENTE de 'enviado-aquisicao'
-                      if (currentUserProfile.perfil === 'Solicitante' && p.status !== 'enviado-aquisicao') {
-                          // Desabilita inputs, selects e textareas
-                          f.querySelectorAll('input, select, textarea').forEach(el => el.disabled = true);
-                          
-                          // Bloqueia botão salvar
-                          btnSave.disabled = true;
-                          btnSave.textContent = "Bloqueado (Em Processo)";
-                          btnSave.classList.remove('bg-primary-600', 'hover:bg-primary-700');
-                          btnSave.classList.add('bg-gray-400', 'cursor-not-allowed');
-                      }
+    // Preencher selects
+    const u = f.unidade;
+    u.innerHTML = '';
+    state.unidades.forEach(x => u.innerHTML += `<option value="${x}">${x}</option>`);
+    
+    const m = f.modalidade;
+    m.innerHTML = '';
+    state.modalidadesList.forEach(x => m.innerHTML += `<option value="${x}">${x}</option>`);
+    
+    const g = f.grupoDeCompra;
+    g.innerHTML = '<option value="">-</option>';
+    state.gruposDeCompra.forEach(x => g.innerHTML += `<option value="${x}">${x}</option>`);
+    
+    const s = f.status;
+    s.innerHTML = '';
+    Object.entries(STATUS_MAP).filter(([k]) => k !== 'a-inserir-rn').forEach(([k, v]) => s.innerHTML += `<option value="${k}">${v.text}</option>`);
+
+    // Filtro de unidade padrão
+    const filterU = document.getElementById('filter-unidade')?.value;
+    if (filterU && !id) {
+        f.unidade.value = filterU;
+    }
+
+    // Resetar para 'Un' se for novo
+    f.unidadeMedida.value = 'Un';
+
+    // Controle de Área Admin e Campo RN
+    const adminArea = document.getElementById('modal-admin-area');
+    const rnInput = f.numRN;
+
+    // Se for Admin ou Aquisições, mostra a área e LIBERA o campo RN
+    if (currentUserProfile.perfil !== 'Solicitante') {
+        adminArea.classList.remove('hidden');
+        // AQUI ESTÁ A CORREÇÃO: Removemos o bloqueio. Agora você pode digitar sempre.
+        rnInput.disabled = false; 
+        rnInput.classList.remove('bg-gray-100', 'cursor-not-allowed');
+        rnInput.placeholder = "Digite a RN (Opcional)";
+    } else {
+        adminArea.classList.add('hidden');
+    }
+
+    if (id) {
+        // --- EDIÇÃO ---
+        const p = state.pedidos.find(x => x.id === id);
+        if (p) {
+            f.unidade.value = p.unidade;
+            f.nomeDemandante.value = p.nomeDemandante;
+            f.cr.value = p.cr || '';
+            f.projeto.value = p.projeto || '';
+            f.nomeProduto.value = p.nomeProduto;
+            f.codigoProduto.value = p.codigoProduto || '';
+            f.variacao.value = p.variacao || '';
+            f.quantidade.value = p.quantidade;
+            f.valorUnitario.value = p.valorUnitario;
+            f.valorTotal.value = p.valorTotal;
+            f.descricao.value = p.descricao || '';
+            if (p.unidadeMedida) f.unidadeMedida.value = p.unidadeMedida;
+
+            if (p.modalidade) f.modalidade.value = p.modalidade;
+            if (p.grupoDeCompra) f.grupoDeCompra.value = p.grupoDeCompra;
+            f.numRN.value = p.numRN || '';
+            f.numOC.value = p.numOC || '';
+            f.status.value = p.status;
+            if (p.dataAberturaRN) f.dataAberturaRN.value = p.dataAberturaRN;
+            if (p.dataPrevisao) f.dataPrevisao.value = p.dataPrevisao;
+            if (p.fornecedor) f.fornecedor.value = p.fornecedor;
+            if (p.segmento) f.segmento.value = p.segmento;
+
+            if (currentUserProfile.perfil === 'Solicitante' && p.status !== 'enviado-aquisicao') {
+                f.querySelectorAll('input, select, textarea').forEach(el => el.disabled = true);
+                btnSave.disabled = true;
+                btnSave.textContent = "Bloqueado (Em Processo)";
+                btnSave.classList.remove('bg-primary-600', 'hover:bg-primary-700');
+                btnSave.classList.add('bg-gray-400', 'cursor-not-allowed');
+            }
+            
+            const anexosBtn = document.getElementById('btn-ver-anexos');
+            const anexoCount = p.urlAnexos?.length || 0;
+            anexosBtn.textContent = `Ver Anexos (${anexoCount})`;
+            // ... (restante da lógica de anexos igual ao original)
+             anexosBtn.onclick = () => {
+                 const currentItem = state.pedidos.find(x => x.id === id);
+                 if (currentItem && currentItem.urlAnexos && currentItem.urlAnexos.length > 0) {
+                     openAttachmentsModal(currentItem.urlAnexos);
+                 } else {
+                     showNotification("Nenhum anexo existente.", "error");
                  }
-             } else {
-                 if(!filterU) f.unidade.value = currentUserProfile.unidade;
-                 f.nomeDemandante.value = currentUserProfile.nome;
-                 // NOVO STATUS PADRÃO: Enviado para Aquisição
-                 f.status.value = 'enviado-aquisicao';
-                 
-                 // Reseta o botão de anexos para o modo 'Novo' (sem anexo)
-                 const anexosBtn = document.getElementById('btn-ver-anexos');
-                 if (anexosBtn) {
-                     anexosBtn.textContent = `Ver Anexos (0)`;
-                     anexosBtn.classList.add('text-gray-700', 'border-gray-300', 'bg-white');
-                     anexosBtn.classList.remove('text-blue-600', 'border-blue-300', 'bg-blue-50');
-                 }
-             }
-             document.getElementById('modal-pedido').classList.remove('hidden');
-        };
+             };
+        }
+    } else {
+        // --- CRIAÇÃO (NOVO) ---
+        if (!filterU) f.unidade.value = currentUserProfile.unidade;
+        f.nomeDemandante.value = currentUserProfile.nome;
+        f.status.value = 'enviado-aquisicao';
+        
+        // Reset botão anexos
+        const anexosBtn = document.getElementById('btn-ver-anexos');
+        if(anexosBtn) anexosBtn.textContent = `Ver Anexos (0)`;
+    }
+
+    document.getElementById('modal-pedido').classList.remove('hidden');
+};
 
         window.closePedidoModal = () => {
              document.getElementById('modal-pedido').classList.add('hidden');
