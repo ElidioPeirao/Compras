@@ -1513,7 +1513,7 @@ window.closeAttachmentsModal = () => {
 
 
         // --- GESTÃO DE NF ---
-        window.renderGestaoNFPage = function() {
+window.renderGestaoNFPage = function() {
     const tbody = document.getElementById('tabela-nf-body');
     if (!tbody) return;
     tbody.innerHTML = '';
@@ -1521,55 +1521,75 @@ window.closeAttachmentsModal = () => {
     const perfil = currentUserProfile.perfil || "Solicitante";
     const isGestor = perfil === 'Aquisicoes' || perfil === 'Admin';
     const isRecebedor = perfil === 'Recebedor';
-    
-    // Ler o filtro atual
     const filterType = document.getElementById('filter-nf-status') ? document.getElementById('filter-nf-status').value : 'pendente';
 
-    // 1. DEFINIR QUAIS STATUS DEVEM APARECER NA GESTÃO DE NF
-    // Adicionamos 'em-cotacao' e 'enviado-aquisicao' se tiverem RN definida, para não sumirem da tela após criar o grupo
-    const STATUSES_TO_TRACK = [
-        'registrado', 
-        'aguardando-entrega', 
-        'entregue', 
-        'aguardando-lancamento', 
-        'finalizado', 
-        'em-atraso'
-    ];
-
-    // Filtra apenas os pedidos que estão nos status rastreáveis da NF
+    // Status básicos rastreáveis
+    const STATUSES_TO_TRACK = ['registrado', 'aguardando-entrega', 'entregue', 'aguardando-lancamento', 'finalizado', 'em-atraso'];
     const pedidosAtivos = state.pedidos.filter(p => STATUSES_TO_TRACK.includes(p.status));
 
-    // 2. APLICAR O FILTRO SELECIONADO NA ABA
+    // --- FUNÇÃO AUXILIAR DE COMPLIANCE ---
+    const getCompliance = (item) => {
+        if (!item.urlNotaFiscal) return 'sem-nf';
+        
+        // Se não tiver data do dia salva, usa a data de emissão como fallback ou ignora
+        if (!item.dataDoDia || !item.dataEmissao) return 'ok';
+
+        const dEnvio = new Date(item.dataDoDia + 'T00:00:00'); // Data que foi anexado (Data do Dia)
+        const dEmissao = new Date(item.dataEmissao + 'T00:00:00'); // Data da Nota
+
+        // 1. Regra: Fora da Competência (Anexado no mês seguinte à emissão)
+        // Lógica: Se o mês/ano do envio for maior que o mês/ano da emissão
+        const envioMesAno = dEnvio.getFullYear() * 12 + dEnvio.getMonth();
+        const emissaoMesAno = dEmissao.getFullYear() * 12 + dEmissao.getMonth();
+
+        if (envioMesAno > emissaoMesAno) return 'fora-competencia';
+
+        // 2. Regra: Fora da NP (Dia 27 ao 31)
+        const diaEnvio = dEnvio.getDate();
+        if (diaEnvio >= 27) return 'fora-np';
+
+        return 'ok';
+    };
+
+    // --- FILTRAGEM ---
     let pedidosFiltrados = [];
 
     if (filterType === 'pendente') {
-        // "Aguardando Nota": Mostra tudo que está ativo, não finalizado e SEM arquivo de NF
-        // Isso inclui: Registrado, Aguardando Entrega, Em Atraso
         pedidosFiltrados = pedidosAtivos.filter(p => p.status !== 'finalizado' && !p.urlNotaFiscal);
     } 
     else if (filterType === 'aguardando-entrega') {
-        // NOVO FILTRO: Específico para Aguardando Entrega
         pedidosFiltrados = pedidosAtivos.filter(p => p.status === 'aguardando-entrega' || p.status === 'em-atraso');
     }
     else if (filterType === 'entregue') {
-        // "Nota Entregue": Itens que já têm NF OU já estão finalizados/lançamento
         pedidosFiltrados = pedidosAtivos.filter(p => !!p.urlNotaFiscal || ['aguardando-lancamento', 'finalizado'].includes(p.status));
-    } 
+    }
+    // NOVOS FILTROS
+    else if (filterType === 'fora-np') {
+        pedidosFiltrados = pedidosAtivos.filter(p => getCompliance(p) === 'fora-np');
+    }
+    else if (filterType === 'fora-competencia') {
+        pedidosFiltrados = pedidosAtivos.filter(p => getCompliance(p) === 'fora-competencia');
+    }
+    else if (filterType === 'com-obs') {
+        pedidosFiltrados = pedidosAtivos.filter(p => p.obsNF && p.obsNF.trim() !== '');
+    }
     else {
-        // "Todos"
         pedidosFiltrados = pedidosAtivos;
     }
 
     if (pedidosFiltrados.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="7" class="py-10 text-center text-gray-500">Nenhum pedido encontrado com este filtro.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="7" class="py-10 text-center text-gray-500">Nenhum pedido encontrado.</td></tr>`;
         return;
     }
 
-    // --- LÓGICA DE AGRUPAMENTO (MANTIDA) ---
+    // --- AGRUPAMENTO (RN) ---
     const grouped = [];
     const rnMap = new Map();
 
     pedidosFiltrados.forEach(p => {
+        // Herda dados para o grupo
+        const compliance = getCompliance(p);
+        
         if (p.numRN) {
             if (!rnMap.has(p.numRN)) {
                 rnMap.set(p.numRN, { 
@@ -1583,86 +1603,103 @@ window.closeAttachmentsModal = () => {
                     hasNF: !!p.urlNotaFiscal,
                     nfUrl: p.urlNotaFiscal,
                     fin: p.fin,
-                    dataVcto: p.dataVcto
+                    dataVcto: p.dataVcto,
+                    obsNF: p.obsNF, // Obs do grupo
+                    compliance: compliance // Compliance do grupo
                 });
                 grouped.push(rnMap.get(p.numRN));
             } else {
                 const g = rnMap.get(p.numRN);
                 g.items.push(p);
                 g.total += parseFloat(p.valorTotal||0);
-                
-                // Lógica para exibir o status mais crítico ou avançado do grupo
-                // Prioriza 'aguardando-entrega' visualmente sobre 'registrado'
-                if (p.status === 'aguardando-entrega' || p.status === 'em-atraso') {
-                    g.status = p.status;
-                } else if (STATUS_MAP[p.status] && STATUS_MAP[g.status] && STATUS_MAP[p.status].text.length > STATUS_MAP[g.status].text.length) {
-                     g.status = p.status;
-                }
-                
                 if(!!p.urlNotaFiscal) g.hasNF = true;
+                // Se algum item tiver obs, marca o grupo
+                if(p.obsNF) g.obsNF = p.obsNF;
+                // Se algum item tiver problema de compliance, marca o grupo (prioridade erro)
+                if(compliance !== 'ok' && compliance !== 'sem-nf') g.compliance = compliance;
             }
         } else {
             grouped.push({ 
                 isGroup: false, 
                 ...p,
                 hasNF: !!p.urlNotaFiscal,
-                nfUrl: p.urlNotaFiscal
+                nfUrl: p.urlNotaFiscal,
+                compliance: compliance
             });
         }
     });
 
-    // --- RENDERIZAÇÃO (MANTIDA COM PEQUENOS AJUSTES) ---
+    // --- RENDERIZAÇÃO ---
     grouped.forEach(item => {
         const tr = document.createElement('tr');
-        tr.className = "hover:bg-gray-50 border-b border-gray-100";
         
+        // LÓGICA DE COR DO FUNDO (OBSERVAÇÃO)
+        // Se tiver observação, fundo amarelo claro. Senão, padrão hover cinza.
+        let rowClass = item.obsNF 
+            ? "bg-yellow-50 hover:bg-yellow-100 border-b border-yellow-200" 
+            : "hover:bg-gray-50 border-b border-gray-100";
+            
+        tr.className = rowClass;
+        
+        // Tags de Compliance
+        let complianceTag = '';
+        if (item.compliance === 'fora-np') {
+            complianceTag = `<span class="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-800 border border-orange-200" title="Enviado entre dia 27-31">Fora NP</span>`;
+        } else if (item.compliance === 'fora-competencia') {
+            complianceTag = `<span class="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800 border border-red-200" title="Enviado no mês seguinte">Fora Comp.</span>`;
+        }
+
         const targetId = item.isGroup ? item.numRN : item.id;
-        const nfIcon = item.hasNF ? `<span class="ml-2 text-green-600" title="NF Anexada"><svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg></span>` : '';
+        const nfIcon = item.hasNF ? `<span class="ml-2 text-green-600"><svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg></span>` : '';
+
+        // Display Observação
+        const obsDisplay = item.obsNF 
+            ? `<div class="mt-1 text-[10px] text-yellow-800 font-medium bg-yellow-100/50 p-1 rounded inline-block max-w-[200px] truncate" title="${item.obsNF}">📝 ${item.obsNF}</div>` 
+            : '';
 
         let actionBtn = '';
         let vctoDisplay = '';
         
+        // ... (Lógica de botões idêntica ao código anterior) ...
         if (isGestor || isRecebedor) {
             if (item.hasNF) {
                 const fin = item.fin || '---';
                 const vcto = item.dataVcto ? item.dataVcto.split('-').reverse().join('/') : '---';
-                vctoDisplay = isGestor ? `<div class="text-sm font-medium text-gray-900">${fin}</div><div class="text-xs text-gray-500">Vcto: ${vcto}</div>` : '<div class="text-xs text-gray-400">NF Recebida</div>';
+                vctoDisplay = isGestor 
+                    ? `<div class="text-sm font-medium text-gray-900">${fin}</div>
+                       <div class="text-xs text-gray-500">Vcto: ${vcto}</div>
+                       ${obsDisplay}` 
+                    : '<div class="text-xs text-gray-400">NF Recebida</div>';
                 
                 actionBtn = `
                     <div class="flex justify-end gap-2">
-                        <a href="${item.nfUrl}" target="_blank" class="bg-white border border-gray-300 text-gray-700 px-2 py-1 rounded text-xs hover:bg-gray-50 flex items-center gap-1" title="Ver NF">
-                            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
-                        </a>
-                        <button onclick="openNFModal('${targetId}', ${item.isGroup})" class="text-primary-600 hover:text-primary-800" title="Editar NF"><svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg></button>
+                        <a href="${item.nfUrl}" target="_blank" class="bg-white border border-gray-300 text-gray-700 px-2 py-1 rounded text-xs hover:bg-gray-50 flex items-center gap-1">Ver NF</a>
+                        <button onclick="openNFModal('${targetId}', ${item.isGroup})" class="text-primary-600 hover:text-primary-800"><svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg></button>
                     </div>`;
             } else {
-                vctoDisplay = isGestor ? '<div class="text-xs text-gray-400">Aguardando NF</div>' : '';
-                actionBtn = `<button onclick="openNFModal('${targetId}', ${item.isGroup})" class="bg-green-600 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-green-700 shadow-sm flex items-center gap-1 ml-auto"><svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg> Anexar NF</button>`;
+                vctoDisplay = isGestor ? `<div class="text-xs text-gray-400">Aguardando NF</div>${obsDisplay}` : '';
+                actionBtn = `<button onclick="openNFModal('${targetId}', ${item.isGroup})" class="bg-green-600 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-green-700 shadow-sm flex items-center gap-1 ml-auto">Anexar NF</button>`;
             }
         } else {
             actionBtn = '---'; vctoDisplay = '---';
         }
 
+        // Render HTML
         if (item.isGroup) {
             const st = STATUS_MAP[item.status] || { text: item.status, class: "bg-gray-100" };
             const ocDisplay = item.numOC ? `OC ${item.numOC}` : `RN ${item.numRN}`;
             const finVctoCell = isGestor ? `<td class="px-4 py-4 text-left">${vctoDisplay}</td>` : '';
             
-            // Botões do Grupo
-            let groupActionHtml = actionBtn; // Default para item único se comportar igual
-            if(item.isGroup && isGestor) {
-                 // Recria botões específicos para grupo se necessário ou usa a lógica acima simplificada
-                 if(item.hasNF) {
-                     groupActionHtml = `<div class="flex justify-end gap-2"><a href="${item.nfUrl}" target="_blank" class="text-gray-700 px-2 border rounded text-xs bg-white">Ver NF</a><button onclick="openNFModal('${item.numRN}', true)" class="text-primary-600"><svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg></button></div>`;
-                 } else {
-                     groupActionHtml = `<button onclick="openNFModal('${item.numRN}', true)" class="bg-green-600 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-green-700 ml-auto flex gap-1">Anexar NF (Grupo)</button>`;
-                 }
+            // Botões do Grupo (Simplificado para o exemplo)
+            let groupActionHtml = actionBtn; 
+            if(item.isGroup && isGestor && item.hasNF) {
+                 groupActionHtml = `<div class="flex justify-end gap-2"><a href="${item.nfUrl}" target="_blank" class="text-gray-700 px-2 border rounded text-xs bg-white">Ver NF</a><button onclick="openNFModal('${item.numRN}', true)" class="text-primary-600"><svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg></button></div>`;
             }
 
             tr.innerHTML = `
                 <td class="px-4 py-4 font-bold text-primary-700 flex items-center gap-2">
                     <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" /></svg>
-                    ${ocDisplay} ${nfIcon}
+                    ${ocDisplay} ${nfIcon} ${complianceTag}
                 </td>
                 <td class="px-4 py-4 text-sm text-gray-600">Agrupamento (${item.items.length} itens)</td>
                 <td class="px-4 py-4 text-sm text-gray-900">${item.fornecedor || '-'}</td>
@@ -1675,12 +1712,12 @@ window.closeAttachmentsModal = () => {
                 </td>
             `;
         } else {
-            // ITEM INDIVIDUAL NA GESTÃO DE NF (Sem RN)
+            // ITEM INDIVIDUAL
             const st = STATUS_MAP[item.status] || { text: item.status, class: "bg-gray-100" };
             const finVctoCell = isGestor ? `<td class="px-4 py-4 text-left">${vctoDisplay}</td>` : '';
 
             tr.innerHTML = `
-                <td class="px-4 py-4 text-sm text-gray-500 font-mono">--- ${nfIcon}</td>
+                <td class="px-4 py-4 text-sm text-gray-500 font-mono">--- ${nfIcon} ${complianceTag}</td>
                 <td class="px-4 py-4 text-sm text-gray-900">
                     <div class="font-medium">${item.nomeProduto}</div>
                     <div class="text-xs text-gray-500">${item.unidade}</div>
@@ -2011,7 +2048,8 @@ window.openSupplierAttachments = (id) => {
                     if (f.fin.value) updateData.fin = f.fin.value;
                     if (f.dataEmissao.value) updateData.dataEmissao = f.dataEmissao.value;
                     if (f.dataVcto.value) updateData.dataVcto = f.dataVcto.value;
-                    
+                    if (f.dataDoDia.value) updateData.dataDoDia = f.dataDoDia.value; 
+                    if (f.obsNF.value) updateData.obsNF = f.obsNF.value;
 
                     updateData.obsNF = f.obsNF.value;
                     // updateData.modalidade não salvamos no pedido geralmente, é propriedade do item, 
@@ -3808,15 +3846,17 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
 </div>
     
             <!-- GESTAO DE NF PAGE (NOVO) -->
-            <div id="gestao-nf" class="page-content hidden w-full">
                  <div class="flex justify-between items-center mb-6">
-                    <h2 class="text-2xl font-bold text-gray-900">Gestão de Nota Fiscal</h2>
-                    <select id="filter-nf-status" class="block w-48 rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-white">
-                        <option value="pendente" selected>Aguardando Nota</option>
-                        <option value="entregue">Nota Entregue</option>
-                        <option value="todos">Todos</option>
-                    </select>
-                 </div>
+    <h2 class="text-2xl font-bold text-gray-900">Gestão de Nota Fiscal</h2>
+    <select id="filter-nf-status" class="block w-56 rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-white">
+        <option value="aguardando-entrega">Aguardando Entrega</option>
+        <option value="entregue">Notas Entregue</option>
+        <option value="fora-np">⚠️ Fora da NP (Dia 27-31)</option>
+        <option value="fora-competencia">⛔ Fora da Competência</option>
+        <option value="com-obs">📝 Com Observação</option>
+    </select>
+</div>
+
                  
                  <div class="bg-white shadow-sm border border-gray-200 rounded-lg overflow-hidden">
                     <div class="overflow-x-auto">
