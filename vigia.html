@@ -34,7 +34,7 @@ const firebaseConfig = {
             measurementId: "G-74W14C81WX"
 };
 
-        // --- CAMINHO ATUALIZADO COM SEU ID ---
+        // --- CAMINHO EXATO DOS DADOS ---
         const appId = "1:592503297730:web:cb40e3711d1f9647908d5b"; 
 
         const app = initializeApp(firebaseConfig);
@@ -92,13 +92,12 @@ const firebaseConfig = {
             window.location.reload();
         };
 
-        // --- DADOS: Carregamento Inicial (CORRIGIDO PARA O CAMINHO ESPECÍFICO) ---
+        // --- DADOS: Carregamento Inicial ---
         function initData() {
             loadingIndicator.classList.remove('hidden');
-            loadingIndicator.textContent = "Carregando base de funcionários...";
+            loadingIndicator.textContent = "Carregando dados...";
 
             // 1. Caminho EXATO dos Funcionários
-            // artifacts > ID > public > data > funcionarios
             const funcionariosRef = collection(db, "artifacts", appId, "public", "data", "funcionarios");
 
             onSnapshot(funcionariosRef, (snapshot) => {
@@ -110,7 +109,6 @@ const firebaseConfig = {
                         nome: d.nome || "Sem Nome", 
                         empresa: d.empresa || "Sem Empresa",
                         tipoDoc: d.tipoDoc || "N/A",
-                        // Garante que pega a data certa, independente do nome do campo
                         dataEmissao: d.dataEmissao || d.dataEmissaoDoc 
                     });
                 });
@@ -118,35 +116,28 @@ const firebaseConfig = {
                 console.log("Funcionários carregados:", allEmployees.length);
 
                 if (allEmployees.length > 0) {
-                    loadingIndicator.textContent = "Sistema Conectado. " + allEmployees.length + " funcionários ativos.";
+                    loadingIndicator.textContent = "Sistema Conectado.";
                     loadingIndicator.classList.add('text-green-500');
                     loadingIndicator.classList.remove('text-yellow-500', 'animate-pulse');
                     setTimeout(() => loadingIndicator.classList.add('hidden'), 3000);
-                } else {
-                    loadingIndicator.textContent = "Conectado, mas a lista de funcionários está vazia neste caminho.";
-                    loadingIndicator.classList.add('text-orange-500');
                 }
-            }, (error) => {
-                console.error("Erro ao ler funcionários:", error);
-                loadingIndicator.textContent = "Erro de leitura: " + error.message;
-                loadingIndicator.classList.add('text-red-500');
             });
 
-            // 2. Caminho EXATO dos Pedidos (para ver serviços)
-            // artifacts > ID > public > data > pedidos
+            // 2. Caminho EXATO dos Pedidos (SERVIÇOS)
             const pedidosRef = collection(db, "artifacts", appId, "public", "data", "pedidos");
 
-            const q = query(
-                pedidosRef, 
-                where("modalidade", "==", "Serviço"),
-                where("status", "!=", "finalizado"),
-                where("status", "!=", "cancelado")
-            );
+            // Busca SIMPLIFICADA para evitar erros de índice no Firebase
+            // Trazemos tudo que é Serviço e filtramos o status no javascript
+            const q = query(pedidosRef, where("modalidade", "==", "Serviço"));
 
             onSnapshot(q, (snapshot) => {
                 activeOrders = [];
                 snapshot.forEach(doc => {
-                    activeOrders.push(doc.data());
+                    const d = doc.data();
+                    // Filtra status aqui no código (mais seguro)
+                    if (d.status !== 'finalizado' && d.status !== 'cancelado') {
+                        activeOrders.push(d);
+                    }
                 });
                 console.log("Serviços ativos carregados:", activeOrders.length);
             });
@@ -205,7 +196,6 @@ const firebaseConfig = {
             const validadeASO = 365;
             
             let dataEmissaoDoc;
-            // Tenta converter string ou Timestamp do Firestore
             try { 
                 if (func.dataEmissao && func.dataEmissao.toDate) {
                     dataEmissaoDoc = func.dataEmissao.toDate();
@@ -224,21 +214,29 @@ const firebaseConfig = {
             const docVencido = dataVencimento < hoje;
             const diasRestantes = Math.ceil((dataVencimento - hoje) / (1000 * 60 * 60 * 24));
 
-            // 2. Busca Serviço (Case Insensitive)
-            const servicosDoFuncionario = activeOrders.filter(order => 
-                order.funcionario && order.funcionario.toLowerCase() === func.nome.toLowerCase()
-            );
+            // 2. Busca Serviço (MATCH ROBUSTO)
+            // Normaliza os nomes removendo espaços extras e minúsculas
+            const nomeFuncionarioBusca = func.nome.trim().toLowerCase();
+
+            const servicosDoFuncionario = activeOrders.filter(order => {
+                if (!order.funcionario) return false;
+                return order.funcionario.trim().toLowerCase() === nomeFuncionarioBusca;
+            });
+
+            console.log(`Buscando serviços para: ${nomeFuncionarioBusca}. Encontrados: ${servicosDoFuncionario.length}`);
 
             let servicoInfo = null;
             if (servicosDoFuncionario.length > 0) {
-                // Tenta achar serviço futuro
-                servicoInfo = servicosDoFuncionario.find(s => {
-                    if (!s.dataPrevisao) return false;
-                    const dt = new Date(s.dataPrevisao + 'T00:00:00');
-                    return dt >= hoje;
+                // Tenta encontrar o serviço mais próximo (hoje ou futuro)
+                // Ordena por data (mais recente primeiro)
+                servicosDoFuncionario.sort((a, b) => {
+                    const dA = new Date(a.dataPrevisao || 0);
+                    const dB = new Date(b.dataPrevisao || 0);
+                    return dB - dA;
                 });
-                // Fallback para o primeiro encontrado
-                if (!servicoInfo) servicoInfo = servicosDoFuncionario[0];
+
+                // Pega o primeiro da lista (o mais recente ou futuro)
+                servicoInfo = servicosDoFuncionario[0];
             }
 
             renderCard(func, docVencido, dataVencimento, diasRestantes, servicoInfo);
@@ -256,9 +254,10 @@ const firebaseConfig = {
             let statusText = '';
             let statusIconSVG = '';
 
+            // LÓGICA DE DECISÃO
             if (isVencido) {
                 statusColor = 'bg-red-600';
-                statusText = 'ACESSO NEGADO';
+                statusText = 'ACESSO NEGADO (VENCIDO)';
                 statusIconSVG = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />`;
             } else if (!servico) {
                 statusColor = 'bg-yellow-600';
@@ -276,8 +275,12 @@ const firebaseConfig = {
 
             let dataServicoStr = "---";
             if (servico && servico.dataPrevisao) {
-                const partes = servico.dataPrevisao.split('-');
-                dataServicoStr = `${partes[2]}/${partes[1]}/${partes[0]}`;
+                const partes = servico.dataPrevisao.split('-'); // YYYY-MM-DD
+                if(partes.length === 3) {
+                    dataServicoStr = `${partes[2]}/${partes[1]}/${partes[0]}`;
+                } else {
+                    dataServicoStr = servico.dataPrevisao;
+                }
             }
 
             body.innerHTML = `
@@ -312,7 +315,7 @@ const firebaseConfig = {
                             </div>
                         ` : `
                             <div class="text-yellow-400 font-bold text-lg mb-1">Nenhum Encontrado</div>
-                            <div class="text-xs text-slate-400">Verifique com o setor responsável.</div>
+                            <div class="text-xs text-slate-400">Verifique se o nome está idêntico.</div>
                         `}
                     </div>
                 </div>
