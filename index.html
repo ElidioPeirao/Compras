@@ -80,6 +80,7 @@
 
 // --- VARIÁVEL GLOBAL PARA ITENS DO CONTRATO ---
 // --- VARIÁVEL GLOBAL PARA ITENS DO CONTRATO ---
+// --- VARIÁVEL GLOBAL PARA ITENS DO CONTRATO ---
 let tempContractItems = []; 
 
 // Função para Adicionar Item (SÓ DESCRIÇÃO)
@@ -92,7 +93,7 @@ window.addContractItem = () => {
         return;
     }
 
-    // Adiciona apenas a descrição ao array
+    // Adiciona ao array global
     tempContractItems.push({ descricao: desc });
 
     // Limpa input e renderiza
@@ -101,13 +102,13 @@ window.addContractItem = () => {
     window.renderContractItemsList();
 };
 
-// Função para Remover Item (Mantém igual)
+// Função para Remover Item
 window.removeContractItem = (index) => {
     tempContractItems.splice(index, 1);
     window.renderContractItemsList();
 };
 
-// Função para Renderizar a Tabela Visual (SEM VALOR)
+// Função para Renderizar a Tabela Visual
 window.renderContractItemsList = () => {
     const tbody = document.getElementById('lista-itens-contrato-temp');
     const msg = document.getElementById('empty-itens-msg');
@@ -3523,11 +3524,11 @@ window.showFormFornecedorContrato = (id = null) => {
     form.reset();
     form.dataset.id = id || "";
     
-    // RESETAR A LISTA TEMPORÁRIA
+    // 1. Limpa a lista global antes de carregar
     tempContractItems = []; 
     window.renderContractItemsList();
 
-    // ... (CÓDIGO DE POPULAR SELECTS/CHECKBOXES CONTINUA O MESMO) ...
+    // Popular Selects (Origem e RN)
     const selOrigem = document.getElementById('select-unidade-contrato');
     const selRN = document.getElementById('select-rn-unidade');
     const divCheckboxes = document.getElementById('checkboxes-unidades-uso');
@@ -3538,6 +3539,7 @@ window.showFormFornecedorContrato = (id = null) => {
         selOrigem.innerHTML += `<option value="${u}">${u}</option>`;
         selRN.innerHTML += `<option value="${u}">${u}</option>`;
     });
+    // Checkboxes
     state.unidades.forEach(u => {
         divCheckboxes.innerHTML += `
             <label class="inline-flex items-center space-x-2 bg-white p-1 rounded border border-gray-100">
@@ -3546,8 +3548,8 @@ window.showFormFornecedorContrato = (id = null) => {
             </label>
         `;
     });
-    // ... (FIM CÓDIGO SELECTS) ...
 
+    // Se for edição
     if (id) {
         const item = state.contratosRegistros.find(x => x.id === id);
         if (item) {
@@ -3563,15 +3565,16 @@ window.showFormFornecedorContrato = (id = null) => {
             form.justificativa.value = item.justificativa || '';
             form.observacao.value = item.observacao || '';
 
-            // --- LÓGICA DE CARREGAMENTO ATUALIZADA ---
+            // --- LÓGICA DE CARREGAMENTO DOS ITENS ---
             if (item.itensContrato && Array.isArray(item.itensContrato)) {
-                // Mapeia para garantir que pegamos a descrição, ignorando valor antigo se houver
-                tempContractItems = item.itensContrato.map(i => ({ descricao: i.descricao || i }));
+                // Carrega o array salvo
+                tempContractItems = item.itensContrato;
             } else if (item.itensContrato && typeof item.itensContrato === 'string') {
+                // Suporte legado para string
                 tempContractItems = [{ descricao: item.itensContrato }];
             }
-            window.renderContractItemsList(); 
-            // ------------------------------------------
+            window.renderContractItemsList(); // Atualiza a tabela visual
+            // ----------------------------------------
 
             if (Array.isArray(item.unidadesUso)) {
                 const boxes = document.getElementsByName('unidadesUsoCheck');
@@ -3593,12 +3596,14 @@ window.hideFormFornecedorContrato = () => {
 
 // 6. Salvar (Submit)
 // Substitua o listener do form-fornecedor-contrato existente por este:
+// 6. Salvar (Submit)
 document.getElementById('form-fornecedor-contrato').addEventListener('submit', async (e) => {
     e.preventDefault();
     const f = e.target;
     const btn = f.querySelector('button[type="submit"]');
     const docId = f.dataset.id;
 
+    // Coleta as unidades selecionadas nos checkboxes
     const unidadesSelecionadas = [];
     document.getElementsByName('unidadesUsoCheck').forEach(box => {
         if(box.checked) unidadesSelecionadas.push(box.value);
@@ -3624,10 +3629,9 @@ document.getElementById('form-fornecedor-contrato').addEventListener('submit', a
         justificativa: f.justificativa.value,
         observacao: f.observacao.value,
 
-        // --- LÓGICA NOVA: SALVAR O ARRAY DE ITENS ---
+        // AQUI ESTÁ A CORREÇÃO: Salvando o array global no banco
         itensContrato: tempContractItems, 
-        // --------------------------------------------
-
+        
         unidadesUso: unidadesSelecionadas,        
         updatedAt: Timestamp.now()
     };
