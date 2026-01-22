@@ -78,7 +78,64 @@
         let searchDebounceTimer = null;
         let lastGroupIdForReturn = null; // Armazena o ID/RN do grupo para retorno
 
+// --- VARIÁVEL GLOBAL PARA ITENS DO CONTRATO ---
+// --- VARIÁVEL GLOBAL PARA ITENS DO CONTRATO ---
+let tempContractItems = []; 
 
+// Função para Adicionar Item (SÓ DESCRIÇÃO)
+window.addContractItem = () => {
+    const descInput = document.getElementById('new-item-desc');
+    const desc = descInput.value.trim();
+
+    if (!desc) {
+        showNotification("Digite a descrição do item.", "error");
+        return;
+    }
+
+    // Adiciona apenas a descrição ao array
+    tempContractItems.push({ descricao: desc });
+
+    // Limpa input e renderiza
+    descInput.value = '';
+    descInput.focus();
+    window.renderContractItemsList();
+};
+
+// Função para Remover Item (Mantém igual)
+window.removeContractItem = (index) => {
+    tempContractItems.splice(index, 1);
+    window.renderContractItemsList();
+};
+
+// Função para Renderizar a Tabela Visual (SEM VALOR)
+window.renderContractItemsList = () => {
+    const tbody = document.getElementById('lista-itens-contrato-temp');
+    const msg = document.getElementById('empty-itens-msg');
+    
+    if (!tbody) return;
+    tbody.innerHTML = '';
+
+    if (tempContractItems.length === 0) {
+        if(msg) msg.classList.remove('hidden');
+    } else {
+        if(msg) msg.classList.add('hidden');
+        
+        tempContractItems.forEach((item, index) => {
+            tbody.innerHTML += `
+                <tr class="hover:bg-gray-50 flex justify-between items-center group">
+                    <td class="px-3 py-2 text-sm text-gray-700 break-all flex-1 border-r border-transparent">
+                        • ${item.descricao}
+                    </td>
+                    <td class="px-3 py-2 w-10 text-right">
+                        <button type="button" onclick="removeContractItem(${index})" class="text-gray-400 hover:text-red-600 font-bold px-2">
+                            &times;
+                        </button>
+                    </td>
+                </tr>
+            `;
+        });
+    }
+};
         
         const state = {
             pedidos: [], 
@@ -3458,30 +3515,29 @@ window.closeGerenciarFornecedoresModal = () => {
 };
 
 // 5. Mostrar Formulário (Preencher Selects)
+// Substitua a função window.showFormFornecedorContrato existente por esta:
 window.showFormFornecedorContrato = (id = null) => {
     const form = document.getElementById('form-fornecedor-contrato');
     const viewList = document.getElementById('view-lista-fornecedores-contrato');
     
     form.reset();
     form.dataset.id = id || "";
+    
+    // RESETAR A LISTA TEMPORÁRIA
+    tempContractItems = []; 
+    window.renderContractItemsList();
 
-    // Popular Selects (Origem e RN)
+    // ... (CÓDIGO DE POPULAR SELECTS/CHECKBOXES CONTINUA O MESMO) ...
     const selOrigem = document.getElementById('select-unidade-contrato');
     const selRN = document.getElementById('select-rn-unidade');
     const divCheckboxes = document.getElementById('checkboxes-unidades-uso');
-
-    // Limpa
     selOrigem.innerHTML = '<option value="">Selecione...</option>';
     selRN.innerHTML = '<option value="">Selecione...</option>';
     divCheckboxes.innerHTML = '';
-
-    // Popula Selects Simples
     state.unidades.forEach(u => {
         selOrigem.innerHTML += `<option value="${u}">${u}</option>`;
         selRN.innerHTML += `<option value="${u}">${u}</option>`;
     });
-
-    // Popula Checkboxes (Multi-select)
     state.unidades.forEach(u => {
         divCheckboxes.innerHTML += `
             <label class="inline-flex items-center space-x-2 bg-white p-1 rounded border border-gray-100">
@@ -3490,18 +3546,33 @@ window.showFormFornecedorContrato = (id = null) => {
             </label>
         `;
     });
+    // ... (FIM CÓDIGO SELECTS) ...
 
-    // Se for edição, preencher dados
     if (id) {
         const item = state.contratosRegistros.find(x => x.id === id);
         if (item) {
-            form.fornecedor.value = item.fornecedor;
-            form.cnpj.value = item.cnpj;
-            form.contrato.value = item.contrato;
-            form.unidadeContrato.value = item.unidadeContrato;
-            form.rnUnidade.value = item.rnUnidade;
+            form.fornecedor.value = item.fornecedor || '';
+            form.cnpj.value = item.cnpj || '';
+            form.contrato.value = item.contrato || '';
+            form.unidadeContrato.value = item.unidadeContrato || '';
+            form.rnUnidade.value = item.rnUnidade || '';
+            
+            form.fluxoNota.value = item.fluxoNota || 'Mensal';
+            form.pagamento.value = item.pagamento || '';
+            form.descricao.value = item.descricao || '';
+            form.justificativa.value = item.justificativa || '';
+            form.observacao.value = item.observacao || '';
 
-            // Marcar checkboxes
+            // --- LÓGICA DE CARREGAMENTO ATUALIZADA ---
+            if (item.itensContrato && Array.isArray(item.itensContrato)) {
+                // Mapeia para garantir que pegamos a descrição, ignorando valor antigo se houver
+                tempContractItems = item.itensContrato.map(i => ({ descricao: i.descricao || i }));
+            } else if (item.itensContrato && typeof item.itensContrato === 'string') {
+                tempContractItems = [{ descricao: item.itensContrato }];
+            }
+            window.renderContractItemsList(); 
+            // ------------------------------------------
+
             if (Array.isArray(item.unidadesUso)) {
                 const boxes = document.getElementsByName('unidadesUsoCheck');
                 boxes.forEach(box => {
@@ -3511,7 +3582,6 @@ window.showFormFornecedorContrato = (id = null) => {
         }
     }
 
-    // Alternar visibilidade
     viewList.classList.add('hidden');
     form.classList.remove('hidden');
 };
@@ -3522,13 +3592,13 @@ window.hideFormFornecedorContrato = () => {
 };
 
 // 6. Salvar (Submit)
+// Substitua o listener do form-fornecedor-contrato existente por este:
 document.getElementById('form-fornecedor-contrato').addEventListener('submit', async (e) => {
     e.preventDefault();
     const f = e.target;
     const btn = f.querySelector('button[type="submit"]');
     const docId = f.dataset.id;
 
-    // Coletar checkboxes marcados
     const unidadesSelecionadas = [];
     document.getElementsByName('unidadesUsoCheck').forEach(box => {
         if(box.checked) unidadesSelecionadas.push(box.value);
@@ -3545,9 +3615,20 @@ document.getElementById('form-fornecedor-contrato').addEventListener('submit', a
         fornecedor: f.fornecedor.value,
         cnpj: f.cnpj.value,
         contrato: f.contrato.value,
-        unidadeContrato: f.unidadeContrato.value, // Select único
-        rnUnidade: f.rnUnidade.value,             // Select único
-        unidadesUso: unidadesSelecionadas,        // Array
+        unidadeContrato: f.unidadeContrato.value, 
+        rnUnidade: f.rnUnidade.value,             
+        
+        fluxoNota: f.fluxoNota.value,
+        pagamento: f.pagamento.value,
+        descricao: f.descricao.value,
+        justificativa: f.justificativa.value,
+        observacao: f.observacao.value,
+
+        // --- LÓGICA NOVA: SALVAR O ARRAY DE ITENS ---
+        itensContrato: tempContractItems, 
+        // --------------------------------------------
+
+        unidadesUso: unidadesSelecionadas,        
         updatedAt: Timestamp.now()
     };
 
@@ -5708,48 +5789,99 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
 </div>
 
                 <form id="form-fornecedor-contrato" class="hidden space-y-4">
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        
-                        <div>
-                            <label class="block text-xs font-bold text-gray-700 uppercase mb-1">Fornecedor</label>
-                            <input name="fornecedor" required class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border">
-                        </div>
-                        <div>
-                            <label class="block text-xs font-bold text-gray-700 uppercase mb-1">CNPJ</label>
-                            <input name="cnpj" required class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border">
-                        </div>
-                        <div>
-                            <label class="block text-xs font-bold text-gray-700 uppercase mb-1">Contrato (Nome/Nº)</label>
-                            <input name="contrato" required class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border">
-                        </div>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        
+        <div>
+            <label class="block text-xs font-bold text-gray-700 uppercase mb-1">Fornecedor</label>
+            <input name="fornecedor" required class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border">
+        </div>
+        <div>
+            <label class="block text-xs font-bold text-gray-700 uppercase mb-1">CNPJ</label>
+            <input name="cnpj" required class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border">
+        </div>
+        <div>
+            <label class="block text-xs font-bold text-gray-700 uppercase mb-1">Contrato (Nome/Nº)</label>
+            <input name="contrato" required class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border">
+        </div>
 
-                        <div>
-                            <label class="block text-xs font-bold text-gray-700 uppercase mb-1">Unidade do Contrato (Origem)</label>
-                            <select name="unidadeContrato" id="select-unidade-contrato" required class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-white"></select>
-                        </div>
+        <div>
+            <label class="block text-xs font-bold text-blue-700 uppercase mb-1">Fluxo de Nota</label>
+            <select name="fluxoNota" required class="block w-full rounded-md border-blue-300 shadow-sm sm:text-sm p-2 border bg-blue-50">
+                <option value="Mensal">Mensal</option>
+                <option value="Variavel">Variável</option>
+            </select>
+        </div>
 
-                        <div>
-                            <label class="block text-xs font-bold text-gray-700 uppercase mb-1">RN Unidade</label>
-                            <select name="rnUnidade" id="select-rn-unidade" required class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-white"></select>
-                        </div>
-                    </div>
+        <div>
+            <label class="block text-xs font-bold text-gray-700 uppercase mb-1">Unidade do Contrato (Origem)</label>
+            <select name="unidadeContrato" id="select-unidade-contrato" required class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-white"></select>
+        </div>
 
-                    <div class="mt-4">
-                        <label class="block text-xs font-bold text-gray-700 uppercase mb-2">Unidades que podem utilizar (Selecione)</label>
-                        <div id="checkboxes-unidades-uso" class="grid grid-cols-2 md:grid-cols-4 gap-2 bg-gray-50 p-3 rounded border border-gray-200 max-h-40 overflow-y-auto">
-                            </div>
-                    </div>
-
-                    <div class="flex justify-end gap-2 pt-4 border-t mt-4">
-                        <button type="button" onclick="hideFormFornecedorContrato()" class="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50">Cancelar</button>
-                        <button type="submit" class="px-4 py-2 bg-primary-600 text-white rounded-md text-sm font-medium hover:bg-primary-700 shadow-sm">Salvar Registro</button>
-                    </div>
-                </form>
-
-            </div>
+        <div>
+            <label class="block text-xs font-bold text-gray-700 uppercase mb-1">RN Unidade</label>
+            <select name="rnUnidade" id="select-rn-unidade" required class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-white"></select>
         </div>
     </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 border-t pt-4 border-gray-200">
+        
+        <div>
+            <label class="block text-xs font-bold text-gray-700 uppercase mb-1">Condição de Pagamento</label>
+            <input name="pagamento" placeholder="Ex: 30 dias, A vista..." class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border">
+        </div>
+
+        <div>
+            <label class="block text-xs font-bold text-gray-700 uppercase mb-1">Breve Descrição</label>
+            <input name="descricao" placeholder="Ex: Manutenção de ar condicionado..." class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border">
+        </div>
+
+        <div class="col-span-1 md:col-span-2 bg-gray-50 p-3 rounded border border-gray-200">
+    <label class="block text-xs font-bold text-gray-700 uppercase mb-2">Itens do Contrato</label>
+    
+    <div class="flex flex-col md:flex-row gap-2 mb-2">
+        <input type="text" id="new-item-desc" placeholder="Descrição do item/serviço..." class="flex-1 rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border">
+        <button type="button" onclick="addContractItem()" class="bg-green-600 text-white px-3 py-2 rounded hover:bg-green-700 text-sm font-bold">
+            + Adicionar
+        </button>
+    </div>
+
+    <div class="overflow-hidden rounded-md border border-gray-300 bg-white">
+        <table class="min-w-full divide-y divide-gray-200">
+            <thead class="bg-gray-100">
+                <tr>
+                    <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Descrição</th>
+                    <th class="px-3 py-2 w-10"></th>
+                </tr>
+            </thead>
+            <tbody id="lista-itens-contrato-temp" class="divide-y divide-gray-200">
+                </tbody>
+        </table>
+        <div id="empty-itens-msg" class="p-4 text-center text-xs text-gray-400 italic">Nenhum item adicionado.</div>
+    </div>
 </div>
+
+        <div class="col-span-1 md:col-span-2">
+            <label class="block text-xs font-bold text-gray-700 uppercase mb-1">Justificativa da Contratação</label>
+            <textarea name="justificativa" rows="2" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border" placeholder="Por que este contrato é necessário?"></textarea>
+        </div>
+
+        <div class="col-span-1 md:col-span-2">
+            <label class="block text-xs font-bold text-gray-700 uppercase mb-1">Observações Gerais</label>
+            <textarea name="observacao" rows="2" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border"></textarea>
+        </div>
+    </div>
+
+    <div class="mt-4">
+        <label class="block text-xs font-bold text-gray-700 uppercase mb-2">Unidades que podem utilizar (Selecione)</label>
+        <div id="checkboxes-unidades-uso" class="grid grid-cols-2 md:grid-cols-4 gap-2 bg-gray-50 p-3 rounded border border-gray-200 max-h-40 overflow-y-auto">
+            </div>
+    </div>
+
+    <div class="flex justify-end gap-2 pt-4 border-t mt-4">
+        <button type="button" onclick="hideFormFornecedorContrato()" class="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50">Cancelar</button>
+        <button type="submit" class="px-4 py-2 bg-primary-600 text-white rounded-md text-sm font-medium hover:bg-primary-700 shadow-sm">Salvar Registro</button>
+    </div>
+</form>
 
     
     
