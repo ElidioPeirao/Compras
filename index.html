@@ -1210,6 +1210,7 @@ window.openBoletoModal = () => {
 // Renderizar Tabela
 // Renderizar Tabela Atualizada
 // Renderizar Tabela Atualizada (COM LÓGICA DE DETALHES)
+// Renderizar Tabela Atualizada (COM BOTÕES DE AÇÃO)
 window.renderContratosPage = () => {
     const tbody = document.getElementById('tabela-contratos-body');
     if (!tbody) return;
@@ -1220,7 +1221,6 @@ window.renderContratosPage = () => {
 
     const list = state.contratos.filter(c => {
         if (typeFilter && c.tipo !== typeFilter) return false;
-        // Busca agora inclui Nome do Fornecedor Processado e RN
         const searchText = (c.descricao || '') + (c.quemEnviou || '') + (c.fornecedorNome || '') + (c.numRN || '');
         if (term && !searchText.toLowerCase().includes(term)) return false;
         return true;
@@ -1234,62 +1234,90 @@ window.renderContratosPage = () => {
     list.forEach(c => {
         const dataEnvio = c.createdAt ? new Date(c.createdAt.toDate()).toLocaleDateString('pt-BR') : '-';
         const vencimento = c.vencimento ? new Date(c.vencimento + 'T00:00:00').toLocaleDateString('pt-BR') : '-';
+        const isCancelled = c.status === 'Cancelado';
         
+        // Estilo visual para cancelado
+        const rowOpacity = isCancelled ? 'opacity-50 bg-gray-50' : 'hover:bg-gray-50';
+        const textDecoration = isCancelled ? 'line-through text-gray-400' : 'text-gray-900';
+
         let icon = '';
         let mainText = '';
         let subText = '';
         let actionCell = '';
 
         if (c.tipo === 'Contrato') {
-            // É UM CONTRATO PROCESSADO
-            icon = '<span class="text-green-700 bg-green-100 px-2 py-1 rounded text-xs font-bold border border-green-200">Contrato OK</span>';
+            // CONTRATO
+            if (isCancelled) {
+                icon = '<span class="text-red-700 bg-red-100 px-2 py-1 rounded text-xs font-bold border border-red-200">Cancelado</span>';
+            } else {
+                icon = '<span class="text-green-700 bg-green-100 px-2 py-1 rounded text-xs font-bold border border-green-200">Contrato OK</span>';
+            }
+            
             mainText = c.fornecedorNome || c.descricao;
             subText = `RN: ${c.numRN || '?'} | Base: ${c.contratoBase || '-'}`;
             
-            // Botão "Ver Detalhes" (Mostra tudo)
+            // Botões de Ação (Ver, Editar, Cancelar)
             actionCell = `
-                <button onclick="window.openDetalhesContrato('${c.id}')" class="text-blue-600 hover:text-blue-800 font-bold text-xs flex items-center gap-1 bg-blue-50 px-2 py-1 rounded border border-blue-100">
-                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
-                    Ver Tudo
-                </button>
+                <div class="flex items-center justify-end gap-1">
+                    <button onclick="window.openDetalhesContrato('${c.id}')" class="text-blue-600 hover:text-blue-800 p-1 bg-blue-50 rounded border border-blue-100" title="Ver Detalhes">
+                        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+                    </button>
+                    ${!isCancelled ? `
+                    <button onclick="window.openEditarContratoModal('${c.id}')" class="text-amber-600 hover:text-amber-800 p-1 bg-amber-50 rounded border border-amber-100" title="Editar RN/Obs">
+                        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+                    </button>
+                    <button onclick="window.cancelarContrato('${c.id}')" class="text-red-600 hover:text-red-800 p-1 bg-red-50 rounded border border-red-100" title="Cancelar Contrato">
+                        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+                    </button>
+                    ` : ''}
+                </div>
             `;
         } else {
-            // É UM BOLETO PENDENTE (AINDA NÃO PROCESSADO)
+            // BOLETO PENDENTE
             icon = '<span class="text-orange-600 bg-orange-100 px-2 py-1 rounded text-xs font-bold">Boleto Pendente</span>';
+            if (isCancelled) icon = '<span class="text-red-700 bg-red-100 px-2 py-1 rounded text-xs font-bold">Cancelado</span>';
+
             mainText = c.descricao;
             subText = `Vencimento: ${vencimento}`;
             
-            // Link simples para arquivo
-            actionCell = `
-                <a href="${c.urlArquivo}" target="_blank" class="text-gray-500 hover:text-gray-700 flex items-center gap-1 text-xs">
-                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-                    Arquivo
-                </a>
-            `;
+            // Link Arquivo + Cancelar
+            if (!isCancelled) {
+                actionCell = `
+                    <div class="flex items-center justify-end gap-2">
+                        <a href="${c.urlArquivo}" target="_blank" class="text-gray-500 hover:text-gray-700 flex items-center gap-1 text-xs">
+                            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                        </a>
+                        <button onclick="window.cancelarContrato('${c.id}')" class="text-red-600 hover:text-red-800 p-1 hover:bg-red-50 rounded" title="Cancelar">
+                            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+                        </button>
+                    </div>
+                `;
+            } else {
+                 actionCell = '<span class="text-xs text-gray-400">Inativo</span>';
+            }
         }
 
-        // NOVO: Exibição de CR e Projeto junto com a Descrição
         const details = c.cr || c.projeto 
-            ? `<div class="text-xs text-gray-400 mt-0.5">CR: ${c.cr || '-'} | Proj: ${c.projeto || '-'}</div>` 
+            ? `<div class="text-xs text-gray-400 mt-0.5 ${textDecoration}">CR: ${c.cr || '-'} | Proj: ${c.projeto || '-'}</div>` 
             : '';
 
         tbody.innerHTML += `
-            <tr class="hover:bg-gray-50 border-b border-gray-100">
+            <tr class="${rowOpacity} border-b border-gray-100 transition-colors">
                 <td class="px-4 py-3 text-sm text-gray-600">${dataEnvio}</td>
-                <td class="px-4 py-3 text-sm text-gray-900 font-medium">${c.unidade || '-'}</td>
+                <td class="px-4 py-3 text-sm text-gray-900 font-medium ${textDecoration}">${c.unidade || '-'}</td>
                 
                 <td class="px-4 py-3 text-sm">${icon}</td>
-                <td class="px-4 py-3 text-sm text-gray-900">
-                    <div class="font-medium">${mainText}</div>
-                    <div class="text-xs text-gray-500">${subText}</div>
+                <td class="px-4 py-3 text-sm">
+                    <div class="font-medium ${textDecoration}">${mainText}</div>
+                    <div class="text-xs text-gray-500 ${textDecoration}">${subText}</div>
                     ${details}
                 </td>
                 <td class="px-4 py-3 text-sm text-gray-500">${c.quemEnviou || '-'}</td>
-                <td class="px-4 py-3 text-sm">
+                <td class="px-4 py-3 text-sm text-right">
                     ${actionCell}
                 </td>
                 <td class="px-4 py-3 text-sm">
-                    <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800">
+                    <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${isCancelled ? 'bg-red-100 text-red-800' : 'bg-gray-100 text-gray-800'}">
                         ${c.status || 'Recebido'}
                     </span>
                 </td>
@@ -1297,6 +1325,64 @@ window.renderContratosPage = () => {
         `;
     });
 };
+
+// --- 1. FUNÇÃO DE CANCELAR CONTRATO ---
+window.cancelarContrato = (id) => {
+    showConfirmationModal("Tem certeza que deseja CANCELAR este contrato/boleto? Esta ação marcará o registro como inativo.", async () => {
+        try {
+            await updateDoc(doc(db, `artifacts/${appId}/public/data/contratos`, id), {
+                status: 'Cancelado',
+                cancelledAt: Timestamp.now(),
+                cancelledBy: currentUserProfile.nome
+            });
+            showNotification("Contrato cancelado com sucesso.", "success");
+        } catch(e) {
+            console.error(e);
+            showNotification("Erro ao cancelar.", "error");
+        }
+    });
+};
+
+// --- 2. FUNÇÃO PARA ABRIR O MODAL DE EDIÇÃO ---
+window.openEditarContratoModal = (id) => {
+    const c = state.contratos.find(x => x.id === id);
+    if (!c) return;
+
+    const f = document.getElementById('form-editar-contrato');
+    f.reset();
+    f.contractId.value = id;
+    f.numRN.value = c.numRN || '';
+    f.dataRN.value = c.dataRN || '';
+    f.apontamento.value = c.apontamento || '';
+
+    document.getElementById('modal-editar-contrato').classList.remove('hidden');
+};
+
+// --- 3. LISTENER PARA SALVAR A EDIÇÃO ---
+document.getElementById('form-editar-contrato').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    const btn = f.querySelector('button[type="submit"]');
+    const id = f.contractId.value;
+
+    btn.disabled = true; btn.textContent = "...";
+
+    try {
+        await updateDoc(doc(db, `artifacts/${appId}/public/data/contratos`, id), {
+            numRN: f.numRN.value,
+            dataRN: f.dataRN.value,
+            apontamento: f.apontamento.value
+        });
+
+        showNotification("Dados atualizados com sucesso!", "success");
+        document.getElementById('modal-editar-contrato').classList.add('hidden');
+    } catch(err) {
+        console.error(err);
+        showNotification("Erro ao atualizar.", "error");
+    } finally {
+        btn.disabled = false; btn.textContent = "Salvar Alterações";
+    }
+});
 
 // Salvar Boleto com Novos Campos
 document.getElementById('form-boleto').addEventListener('submit', async e => {
@@ -1346,45 +1432,6 @@ document.getElementById('form-boleto').addEventListener('submit', async e => {
 });
 
 // Salvar Boleto
-document.getElementById('form-boleto').addEventListener('submit', async e => {
-    e.preventDefault();
-    const f = e.target;
-    const btn = f.querySelector('button[type="submit"]');
-    
-    const file = f.fileBoleto.files[0];
-    if(!file) return showNotification("Selecione um arquivo.", "error");
-
-    btn.disabled = true; btn.textContent = "Enviando...";
-
-    try {
-        // 1. Upload
-        const r = ref(storage, `artifacts/${appId}/contratos_boletos/${Date.now()}_${file.name}`);
-        await uploadBytes(r, file);
-        const url = await getDownloadURL(r);
-
-        // 2. Salvar no Firestore (Coleção Unificada 'contratos')
-        await addDoc(collection(db, `artifacts/${appId}/public/data/contratos`), {
-            tipo: 'Boleto', // Marca como boleto avulso
-            descricao: f.descricao.value,
-            vencimento: f.vencimento.value,
-            urlArquivo: url,
-            quemEnviou: currentUserProfile.nome,
-            uidEnviou: currentUser.uid,
-            createdAt: Timestamp.now(),
-            status: 'Pendente'
-        });
-
-        showNotification("Boleto enviado com sucesso!", "success");
-        document.getElementById('modal-boleto').classList.add('hidden');
-        f.reset();
-
-    } catch(err) {
-        console.error(err);
-        showNotification("Erro ao enviar boleto.", "error");
-    } finally {
-        btn.disabled = false; btn.textContent = "Enviar Boleto";
-    }
-});
 
 
 window.openRelatorioMensal = () => {
@@ -3703,19 +3750,30 @@ window.deleteContratoRegistro = (id) => {
 // --- LÓGICA DE PROCESSAMENTO DE CONTRATO APAGAR CASO BUG ---
 
 // 1. Abrir Modal e Carregar Listas
+// 1. Abrir Modal e Carregar Listas (ATUALIZADA)
 window.openProcessarContratoModal = () => {
     const f = document.getElementById('form-processar-contrato');
+    if(!f) return;
     f.reset();
+    
+    // Limpa campos visuais
     document.getElementById('proc-items-container').innerHTML = '<p class="text-xs text-gray-400 italic p-2">Selecione um fornecedor para ver os itens.</p>';
-    document.getElementById('proc-cnpj').value = '';
-    document.getElementById('proc-contrato-base').value = '';
     document.getElementById('proc-boleto-info').textContent = 'Selecione para ver o arquivo anexo.';
+    
+    // Limpa campos do Boleto
+    document.getElementById('proc-bol-unidade').value = '';
+    document.getElementById('proc-bol-cr').value = '';
+    document.getElementById('proc-bol-projeto').value = '';
 
-    // A. Popula Boletos Pendentes (Tipo 'Boleto' e que AINDA NÃO são 'Contrato')
+    // Limpa campos do Fornecedor
+    ['proc-cnpj', 'proc-contrato-base', 'proc-fluxo', 'proc-pagamento', 
+     'proc-origem', 'proc-rn-unidade', 'proc-descricao', 'proc-justificativa', 'proc-obs-geral']
+     .forEach(id => document.getElementById(id).value = '');
+
+    // A. Popula Boletos Pendentes
     const selBoleto = document.getElementById('proc-select-boleto');
     selBoleto.innerHTML = '<option value="">-- Selecione o Boleto --</option>';
     
-    // Filtra apenas o que é Boleto e não foi processado
     const boletosPendentes = state.contratos.filter(c => c.tipo === 'Boleto');
     
     if(boletosPendentes.length === 0) {
@@ -3723,20 +3781,34 @@ window.openProcessarContratoModal = () => {
     } else {
         boletosPendentes.forEach(b => {
             const desc = b.descricao || 'Sem descrição';
-            const val = b.valorTotal ? `R$ ${b.valorTotal}` : '';
-            selBoleto.innerHTML += `<option value="${b.id}">${desc} (${b.unidade})</option>`;
+            selBoleto.innerHTML += `<option value="${b.id}">${desc} (Vcto: ${b.vencimento || '-'})</option>`;
         });
     }
 
-    // Listener para mostrar link do boleto ao selecionar
+    // LISTENER DE MUDANÇA DO BOLETO (Puxar CR, Projeto, Unidade)
     selBoleto.onchange = () => {
         const bid = selBoleto.value;
         const bol = state.contratos.find(x => x.id === bid);
         const info = document.getElementById('proc-boleto-info');
-        if(bol && bol.urlArquivo) {
-            info.innerHTML = `<a href="${bol.urlArquivo}" target="_blank" class="text-blue-600 underline font-bold">Ver Boleto Anexado 🔗</a>`;
+        
+        if(bol) {
+            // Mostra Link
+            if(bol.urlArquivo) {
+                info.innerHTML = `<a href="${bol.urlArquivo}" target="_blank" class="text-blue-600 underline font-bold">Ver Boleto Anexado 🔗</a>`;
+            } else {
+                info.textContent = 'Boleto sem arquivo anexado.';
+            }
+
+            // Puxa Dados do Boleto para os campos readonly
+            document.getElementById('proc-bol-unidade').value = bol.unidade || '-';
+            document.getElementById('proc-bol-cr').value = bol.cr || '-';
+            document.getElementById('proc-bol-projeto').value = bol.projeto || '-';
+
         } else {
             info.textContent = 'Selecione para ver o arquivo anexo.';
+            document.getElementById('proc-bol-unidade').value = '';
+            document.getElementById('proc-bol-cr').value = '';
+            document.getElementById('proc-bol-projeto').value = '';
         }
     };
 
@@ -3750,7 +3822,7 @@ window.openProcessarContratoModal = () => {
     document.getElementById('modal-processar-contrato').classList.remove('hidden');
 };
 
-// 2. Ao selecionar Fornecedor -> Preenche dados e Itens
+// 2. Ao selecionar Fornecedor -> Preenche dados (ATUALIZADA com Justificativa Visível)
 window.onProcessSupplierChange = () => {
     const fid = document.getElementById('proc-select-fornecedor').value;
     const fornecedor = state.contratosRegistros.find(f => f.id === fid);
@@ -3773,16 +3845,16 @@ window.onProcessSupplierChange = () => {
     document.getElementById('proc-origem').value = fornecedor.unidadeContrato || '';
     document.getElementById('proc-rn-unidade').value = fornecedor.rnUnidade || '';
     document.getElementById('proc-descricao').value = fornecedor.descricao || '';
-    document.getElementById('proc-justificativa').value = fornecedor.justificativa || ''; // Hidden input
+    
+    // AGORA PREENCHE A JUSTIFICATIVA VISÍVEL
+    document.getElementById('proc-justificativa').value = fornecedor.justificativa || ''; 
     document.getElementById('proc-obs-geral').value = fornecedor.observacao || ''; // Hidden input
 
     // --- GERA OS CHECKBOXES DOS ITENS ---
     container.innerHTML = '';
     if (fornecedor.itensContrato && Array.isArray(fornecedor.itensContrato) && fornecedor.itensContrato.length > 0) {
         fornecedor.itensContrato.forEach((item, idx) => {
-            // Verifica se o item é objeto (novo padrão) ou string (legado)
             const desc = typeof item === 'object' ? item.descricao : item;
-            
             container.innerHTML += `
                 <label class="flex items-start gap-2 p-2 hover:bg-gray-50 rounded border-b border-gray-100 last:border-0 cursor-pointer">
                     <input type="checkbox" name="proc_itens" value="${desc}" class="mt-1 h-4 w-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500">
@@ -6082,12 +6154,30 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
                 </div>
 
                 <form id="form-processar-contrato" class="space-y-4">
-                    <div class="bg-orange-50 p-4 rounded border border-orange-200">
-                        <label class="block text-xs font-bold text-orange-800 uppercase mb-1">1. Selecione o Boleto Pendente</label>
-                        <select id="proc-select-boleto" class="block w-full rounded-md border-orange-300 shadow-sm sm:text-sm p-2 bg-white" required>
-                            <option value="">Carregando boletos...</option>
-                        </select>
-                        <p class="text-xs text-orange-600 mt-1" id="proc-boleto-info">Selecione para ver o arquivo anexo.</p>
+                    
+                    <div class="bg-orange-50 p-4 rounded border border-orange-200 space-y-3">
+                        <div>
+                            <label class="block text-xs font-bold text-orange-800 uppercase mb-1">1. Selecione o Boleto Pendente</label>
+                            <select id="proc-select-boleto" class="block w-full rounded-md border-orange-300 shadow-sm sm:text-sm p-2 bg-white" required>
+                                <option value="">Carregando boletos...</option>
+                            </select>
+                            <p class="text-xs text-orange-600 mt-1" id="proc-boleto-info">Selecione para ver o arquivo anexo.</p>
+                        </div>
+                        
+                        <div class="grid grid-cols-3 gap-3 pt-2 border-t border-orange-200/50">
+                            <div>
+                                <label class="block text-[10px] text-orange-800 uppercase font-bold">Unidade Pagadora</label>
+                                <input id="proc-bol-unidade" readonly class="block w-full bg-white/50 border-orange-200 rounded text-xs text-gray-700 p-1">
+                            </div>
+                            <div>
+                                <label class="block text-[10px] text-orange-800 uppercase font-bold">Centro de Custo (CR)</label>
+                                <input id="proc-bol-cr" readonly class="block w-full bg-white/50 border-orange-200 rounded text-xs text-gray-700 p-1">
+                            </div>
+                            <div>
+                                <label class="block text-[10px] text-orange-800 uppercase font-bold">Projeto</label>
+                                <input id="proc-bol-projeto" readonly class="block w-full bg-white/50 border-orange-200 rounded text-xs text-gray-700 p-1">
+                            </div>
+                        </div>
                     </div>
 
                     <div>
@@ -6098,7 +6188,7 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
                     </div>
 
                     <div class="bg-gray-50 p-3 rounded border border-gray-200 space-y-3">
-                        <h4 class="text-xs font-bold text-gray-500 uppercase border-b border-gray-300 pb-1">Dados do Cadastro (Automático)</h4>
+                        <h4 class="text-xs font-bold text-gray-500 uppercase border-b border-gray-300 pb-1">Dados do Contrato (Puxados do Cadastro)</h4>
                         
                         <div class="grid grid-cols-2 gap-3">
                             <div>
@@ -6118,7 +6208,7 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
                                 <input id="proc-pagamento" readonly class="block w-full bg-gray-100 border-gray-300 rounded text-xs text-gray-700">
                             </div>
                             <div>
-                                <label class="block text-[10px] text-gray-500 uppercase">Unidade Origem</label>
+                                <label class="block text-[10px] text-gray-500 uppercase">Unidade Origem (Contrato)</label>
                                 <input id="proc-origem" readonly class="block w-full bg-gray-100 border-gray-300 rounded text-xs text-gray-700">
                             </div>
                             <div>
@@ -6128,11 +6218,15 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
                         </div>
 
                         <div>
-                            <label class="block text-[10px] text-gray-500 uppercase">Descrição</label>
+                            <label class="block text-[10px] text-gray-500 uppercase">Descrição do Contrato</label>
                             <input id="proc-descricao" readonly class="block w-full bg-gray-100 border-gray-300 rounded text-xs text-gray-700">
                         </div>
+
+                        <div>
+                            <label class="block text-[10px] text-gray-500 uppercase">Justificativa da Contratação</label>
+                            <textarea id="proc-justificativa" readonly rows="2" class="block w-full bg-gray-100 border-gray-300 rounded text-xs text-gray-700"></textarea>
+                        </div>
                         
-                        <input type="hidden" id="proc-justificativa">
                         <input type="hidden" id="proc-obs-geral">
                     </div>
 
@@ -6183,7 +6277,40 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
     </div>
 </div>
 
+<div id="modal-editar-contrato" class="relative z-50 hidden">
+    <div class="fixed inset-0 bg-gray-900/75 backdrop-blur-sm transition-opacity"></div>
+    <div class="fixed inset-0 z-10 flex items-center justify-center p-4">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-md p-6">
+            <h3 class="text-lg font-bold text-gray-900 mb-4">Editar Dados de Execução</h3>
+            
+            <form id="form-editar-contrato" class="space-y-4">
+                <input type="hidden" name="contractId">
+                
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">Número da RN</label>
+                    <input name="numRN" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border focus:ring-blue-500 focus:border-blue-500">
+                </div>
 
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">Data da RN</label>
+                    <input name="dataRN" type="date" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border">
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">Apontamento / Observações</label>
+                    <textarea name="apontamento" rows="3" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border"></textarea>
+                </div>
+
+                <div class="flex justify-end gap-2 pt-2 border-t mt-4">
+                    <button type="button" onclick="document.getElementById('modal-editar-contrato').classList.add('hidden')" class="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50">Cancelar</button>
+                    <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700 shadow-sm">Salvar Alterações</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+// acaba aqui
 
 <div id="modal-gerenciar-fornecedores" class="relative z-50 hidden">
     <div class="fixed inset-0 bg-gray-900/75 backdrop-blur-sm transition-opacity"></div>
