@@ -97,15 +97,32 @@
                 "Produto", "Serviço", "Contrato", "Compra Regional", "Requisição CD", "Fundo Rotativo", "Chave Eventual", "Sede"
             ],
             usuarios: [], 
+            contratos: [],
             produtosBuscados: [], 
             linksExternos: [], 
             selectedPedidos: [], 
             filtros: { unidade: "", modalidade: "", status: "", search: "", fornecedor: "" }, // NOVO: Adicionado campo de busca
             isSidebarOpen: true,
             sortConfig: { field: 'dataSolicitacao', direction: 'desc' }// NOVO: Estado da barra lateral
-
             
+        
         };
+        let unsubscribeContratos = null; // NOVO
+        // Função Fetch (Adicione junto com as outras fetchs)
+async function fetchContratos() {
+    if (unsubscribeContratos) unsubscribeContratos();
+    // Ordena por data de criação (envio)
+    const q = query(collection(db, `artifacts/${appId}/public/data/contratos`), orderBy('createdAt', 'desc'));
+    
+    unsubscribeContratos = onSnapshot(q, s => {
+        state.contratos = [];
+        s.forEach(d => state.contratos.push({id: d.id, ...d.data()}));
+        // Se a aba estiver aberta, renderiza
+        if(!document.getElementById('gestao-contratos').classList.contains('hidden')) {
+            window.renderContratosPage();
+        }
+    });
+}
 
         const STATUS_MAP = {
             // NOVO STATUS: ENVIADO PARA AQUISIÇÃO
@@ -200,6 +217,7 @@
                 fetchFornecedores(); 
                 fetchUnidades(); 
                 fetchFuncionarios();
+                fetchContratos()
 
                 if (currentUserProfile.perfil === 'Admin') fetchUsuarios();
                 
@@ -226,57 +244,89 @@
             const servText = document.getElementById('nav-servicos-text');
             const contratosNav = document.getElementById('nav-contratos-item');
             
-            // NOVO: Botão de Funcionários na aba Serviços
+            // Botões da página de Contratos
+            const btnNovoContrato = document.getElementById('btn-novo-contrato');
+            const btnEnviarBoleto = document.getElementById('btn-enviar-boleto');
+            
+            // Botão de Funcionários
             const btnFunc = document.getElementById('btn-gestao-funcionarios');
             
-            // Reset. Usando ?. para evitar o erro de ReferenceError
+            // --- 1. RESET (Esconde tudo por padrão) ---
             adminNav?.classList.add('hidden');
             fornNav?.classList.add('hidden');
             unitNav?.classList.add('hidden');
             nfNav?.classList.add('hidden');
-            solNav?.classList.remove('hidden'); // Default visible
-            servNav?.classList.remove('hidden'); // Default visible for services
-            if(contratosNav) contratosNav.classList.add('hidden');
+            contratosNav?.classList.add('hidden');
             
-            // Garante que comece escondido
+            // Botões específicos
             if(btnFunc) btnFunc.classList.add('hidden');
+            if(btnNovoContrato) btnNovoContrato.classList.add('hidden');
+            if(btnEnviarBoleto) btnEnviarBoleto.classList.add('hidden');
 
-            // Lógica de Visibilidade e Nomes
+            // --- 2. CONFIGURAÇÃO POR PERFIL ---
+
+            // Botão "Enviar Boleto" aparece para TODOS os perfis nesta página
+            if(btnEnviarBoleto) btnEnviarBoleto.classList.remove('hidden');
+
+            // Lógica Solicitante
             if (perfil === 'Solicitante') {
+                solNav?.classList.remove('hidden');
+                servNav?.classList.remove('hidden');
+                contratosNav?.classList.remove('hidden'); // AGORA VISÍVEL PARA SOLICITANTE
+
                 if(solText) solText.textContent = "Solicitação de Suprimentos";
                 if(servText) servText.textContent = "Solicitação de Serviços";
                 document.getElementById('servicos-title').textContent = "Meus Serviços Solicitados";
-            } else {
-                if(solText) solText.textContent = "Gestão de Suprimentos";
-                if(servText) servText.textContent = "Gestão de Serviços";
-                document.getElementById('servicos-title').textContent = "Gestão de Serviços";
-            }
-
-            if (perfil === 'Admin') {
+            } 
+            
+            // Lógica Admin
+            else if (perfil === 'Admin') {
+                solNav?.classList.remove('hidden');
+                servNav?.classList.remove('hidden');
+                
                 adminNav?.classList.remove('hidden');
                 fornNav?.classList.remove('hidden');
                 unitNav?.classList.remove('hidden');
                 nfNav?.classList.remove('hidden');
-                if(contratosNav) contratosNav.classList.remove('hidden');
-                // Admin também vê botão de funcionários
+                contratosNav?.classList.remove('hidden');
+                
                 if(btnFunc) btnFunc.classList.remove('hidden');
+                if(btnNovoContrato) btnNovoContrato.classList.remove('hidden'); // Admin vê Novo Contrato
+
+                if(solText) solText.textContent = "Gestão de Suprimentos";
+                if(servText) servText.textContent = "Gestão de Serviços";
+                document.getElementById('servicos-title').textContent = "Gestão de Serviços";
             } 
+            
+            // Lógica Aquisições
             else if (perfil === 'Aquisicoes') {
+                solNav?.classList.remove('hidden');
+                servNav?.classList.remove('hidden');
+
                 fornNav?.classList.remove('hidden');
                 unitNav?.classList.remove('hidden');
                 nfNav?.classList.remove('hidden');
-                if(contratosNav) contratosNav.classList.remove('hidden');
-                // AQUI ESTÁ A LÓGICA: Aquisições vê o botão
+                contratosNav?.classList.remove('hidden');
+                
                 if(btnFunc) btnFunc.classList.remove('hidden');
+                if(btnNovoContrato) btnNovoContrato.classList.remove('hidden'); // Aquisições vê Novo Contrato
+
+                if(solText) solText.textContent = "Gestão de Suprimentos";
+                if(servText) servText.textContent = "Gestão de Serviços";
+                document.getElementById('servicos-title').textContent = "Gestão de Serviços";
             }
+            
+            // Lógica Recebedor
             else if (perfil === 'Recebedor') {
-                // Recebedor vê apenas Dashboard e Gestão NF
                 nfNav?.classList.remove('hidden');
+                // Recebedor geralmente não vê contratos, mas se precisar enviar boleto, descomente abaixo:
+                // contratosNav?.classList.remove('hidden'); 
+                
                 solNav?.classList.add('hidden'); 
                 servNav?.classList.add('hidden');
             }
             
-            // Lógica do menu lateral (mantida igual)
+            // Lógica do menu lateral (mantida)
             const toggleButton = document.getElementById('sidebar-toggle-btn');
             if (toggleButton) {
                 toggleButton.removeEventListener('click', toggleSidebar);
@@ -1076,6 +1126,109 @@ window.validateServiceEmployee = () => {
             modal.classList.remove('hidden');
         };
 
+
+
+// Abrir Modal
+window.openBoletoModal = () => {
+    document.getElementById('form-boleto').reset();
+    document.getElementById('modal-boleto').classList.remove('hidden');
+};
+
+// Renderizar Tabela
+window.renderContratosPage = () => {
+    const tbody = document.getElementById('tabela-contratos-body');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+
+    const term = document.getElementById('filter-contrato-search')?.value.toLowerCase() || '';
+    const typeFilter = document.getElementById('filter-contrato-tipo')?.value || '';
+
+    // Filtragem
+    const list = state.contratos.filter(c => {
+        if (typeFilter && c.tipo !== typeFilter) return false;
+        if (term && !c.descricao.toLowerCase().includes(term) && !c.quemEnviou.toLowerCase().includes(term)) return false;
+        return true;
+    });
+
+    if (list.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="6" class="py-8 text-center text-gray-500">Nenhum registro encontrado.</td></tr>`;
+        return;
+    }
+
+    list.forEach(c => {
+        const dataEnvio = c.createdAt ? new Date(c.createdAt.toDate()).toLocaleDateString('pt-BR') : '-';
+        const vencimento = c.vencimento ? new Date(c.vencimento + 'T00:00:00').toLocaleDateString('pt-BR') : '-';
+        
+        // Ícone baseado no tipo
+        const icon = c.tipo === 'Contrato' 
+            ? '<span class="text-blue-600 bg-blue-100 px-2 py-1 rounded text-xs font-bold">Contrato</span>'
+            : '<span class="text-orange-600 bg-orange-100 px-2 py-1 rounded text-xs font-bold">Boleto</span>';
+
+        tbody.innerHTML += `
+            <tr class="hover:bg-gray-50 border-b border-gray-100">
+                <td class="px-4 py-3 text-sm text-gray-600">${dataEnvio}</td>
+                <td class="px-4 py-3 text-sm">${icon}</td>
+                <td class="px-4 py-3 text-sm text-gray-900">
+                    <div class="font-medium">${c.descricao}</div>
+                    <div class="text-xs text-gray-500">Vencimento: ${vencimento}</div>
+                </td>
+                <td class="px-4 py-3 text-sm text-gray-500">${c.quemEnviou}</td>
+                <td class="px-4 py-3 text-sm">
+                    <a href="${c.urlArquivo}" target="_blank" class="text-blue-600 hover:underline flex items-center gap-1">
+                        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                        Ver Arquivo
+                    </a>
+                </td>
+                <td class="px-4 py-3 text-sm">
+                    <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800">
+                        ${c.status || 'Recebido'}
+                    </span>
+                </td>
+            </tr>
+        `;
+    });
+};
+
+// Salvar Boleto
+document.getElementById('form-boleto').addEventListener('submit', async e => {
+    e.preventDefault();
+    const f = e.target;
+    const btn = f.querySelector('button[type="submit"]');
+    
+    const file = f.fileBoleto.files[0];
+    if(!file) return showNotification("Selecione um arquivo.", "error");
+
+    btn.disabled = true; btn.textContent = "Enviando...";
+
+    try {
+        // 1. Upload
+        const r = ref(storage, `artifacts/${appId}/contratos_boletos/${Date.now()}_${file.name}`);
+        await uploadBytes(r, file);
+        const url = await getDownloadURL(r);
+
+        // 2. Salvar no Firestore (Coleção Unificada 'contratos')
+        await addDoc(collection(db, `artifacts/${appId}/public/data/contratos`), {
+            tipo: 'Boleto', // Marca como boleto avulso
+            descricao: f.descricao.value,
+            vencimento: f.vencimento.value,
+            urlArquivo: url,
+            quemEnviou: currentUserProfile.nome,
+            uidEnviou: currentUser.uid,
+            createdAt: Timestamp.now(),
+            status: 'Pendente'
+        });
+
+        showNotification("Boleto enviado com sucesso!", "success");
+        document.getElementById('modal-boleto').classList.add('hidden');
+        f.reset();
+
+    } catch(err) {
+        console.error(err);
+        showNotification("Erro ao enviar boleto.", "error");
+    } finally {
+        btn.disabled = false; btn.textContent = "Enviar Boleto";
+    }
+});
 
 
 window.openRelatorioMensal = () => {
@@ -3766,7 +3919,7 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
     <svg class="mr-3 h-5 w-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
     </svg>
-    Gestão de Contratos
+    Gestão de Contratos & Taxas
 </button>
 
 <a href="suporte.html" target="_blank" class="nav-item w-full group flex items-center px-3 py-2.5 text-sm font-medium rounded-md transition-colors text-primary-100 hover:bg-primary-800 hover:text-white no-underline">
@@ -4223,50 +4376,86 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
                     </div>
                 </div>
 
-                <div id="gestao-contratos" class="page-content hidden w-full">
-    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
-        <h2 class="text-2xl font-bold text-gray-900">Gestão de Contratos</h2>
-        <button class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700 focus:outline-none">
+    <div id="gestao-contratos" class="page-content hidden w-full">
+<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
+    <h2 class="text-2xl font-bold text-gray-900">Gestão de Contratos & Boletos</h2>
+    
+    <div class="flex gap-2"> <button id="btn-novo-contrato" class="hidden inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700 focus:outline-none">
             <svg class="-ml-1 mr-2 h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
             </svg>
             Novo Contrato
         </button>
-    </div>
 
-    <div class="bg-white p-4 rounded-lg shadow-sm border border-gray-200 mb-6 flex gap-4">
+        <button id="btn-enviar-boleto" onclick="openBoletoModal()" class="hidden inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-orange-600 hover:bg-orange-700 focus:outline-none">
+            <svg class="-ml-1 mr-2 h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+            </svg>
+            Enviar Boleto / Fatura
+        </button>
+
+    </div>
+</div>
+
+    <div class="bg-white p-4 rounded-lg shadow-sm border border-gray-200 mb-6 flex flex-col md:flex-row gap-4">
         <div class="flex-1">
-            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Buscar Contrato</label>
-            <input type="text" placeholder="Número, Fornecedor ou Objeto..." class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-gray-50">
+            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Buscar</label>
+            <input type="text" id="filter-contrato-search" placeholder="Fornecedor, Nº Contrato ou Descrição..." class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-gray-50" oninput="window.renderContratosPage()">
         </div>
-        <div class="w-48">
-            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Status</label>
-            <select class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-white">
-                <option value="">Ativos</option>
-                <option value="vencidos">Vencidos</option>
-                <option value="todos">Todos</option>
+        <div class="w-full md:w-48">
+            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Tipo</label>
+            <select id="filter-contrato-tipo" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-white" onchange="window.renderContratosPage()">
+                <option value="">Todos</option>
+                <option value="Contrato">Contratos</option>
+                <option value="Boleto">Boletos Avulsos</option>
             </select>
         </div>
     </div>
 
     <div class="bg-white shadow-sm border border-gray-200 rounded-lg overflow-hidden">
-        <table class="min-w-full divide-y divide-gray-200">
-            <thead class="bg-gray-50">
-                <tr>
-                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Nº Contrato</th>
-                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Fornecedor</th>
-                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Objeto</th>
-                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Vigência</th>
-                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                    <th class="px-4 py-3"></th>
-                </tr>
-            </thead>
-            <tbody id="tabela-contratos-body" class="bg-white divide-y divide-gray-200">
-                <tr>
-                    <td colspan="6" class="py-8 text-center text-gray-500">Nenhum contrato cadastrado ainda.</td>
-                </tr>
-            </tbody>
-        </table>
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Data Envio</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Tipo</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Fornecedor / Descrição</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Quem Enviou</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Arquivo</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                    </tr>
+                </thead>
+                <tbody id="tabela-contratos-body" class="bg-white divide-y divide-gray-200"></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<div id="modal-boleto" class="relative z-50 hidden">
+    <div class="fixed inset-0 bg-gray-900/75 backdrop-blur-sm transition-opacity"></div>
+    <div class="fixed inset-0 z-10 flex items-center justify-center p-4">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-md p-6">
+            <h3 class="text-lg font-bold mb-4 text-gray-900">Enviar Boleto / Fatura</h3>
+            <form id="form-boleto" class="space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">Fornecedor / Referência</label>
+                    <input name="descricao" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border" placeholder="Ex: Conta de Luz, Aluguel Setembro...">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">Data de Vencimento</label>
+                    <input name="vencimento" type="date" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">Arquivo do Boleto (PDF/Imagem)</label>
+                    <input type="file" name="fileBoleto" required class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-orange-50 file:text-orange-700 hover:file:bg-orange-100 mt-1">
+                </div>
+                
+                <div class="flex justify-end gap-2 pt-4">
+                    <button type="button" onclick="document.getElementById('modal-boleto').classList.add('hidden')" class="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50">Cancelar</button>
+                    <button type="submit" class="px-4 py-2 bg-orange-600 text-white rounded-md text-sm font-medium hover:bg-orange-700 shadow-sm">Enviar Boleto</button>
+                </div>
+            </form>
+        </div>
     </div>
 </div>
     
