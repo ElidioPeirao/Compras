@@ -1069,28 +1069,24 @@ window.validateServiceEmployee = () => {
 
 
 
-        window.openRelatorioMensal = () => {
+window.openRelatorioMensal = () => {
     const tbody = document.getElementById('tabela-relatorio-body');
     const summary = document.getElementById('relatorio-summary');
     tbody.innerHTML = '';
     
-    // Objeto para agrupar os dados: { "2025-10": { total: 0, foraNP: 0, ... } }
     const reportData = {};
     let grandTotal = 0;
     let grandForaNP = 0;
     let grandForaComp = 0;
+    let grandRetornoFIN = 0; // Novo contador global
 
-    // Filtra apenas pedidos que têm NF anexada
     const pedidosComNF = state.pedidos.filter(p => !!p.urlNotaFiscal);
 
     pedidosComNF.forEach(p => {
-        // Usa dataDoDia (data de anexo/recebimento) como referência para o mês do relatório
-        // Se não tiver dataDoDia, usa dataEmissao como fallback
         const refDateStr = p.dataDoDia || p.dataEmissao;
         if (!refDateStr) return;
 
         const refDate = new Date(refDateStr + 'T00:00:00');
-        // Chave de agrupamento: YYYY-MM
         const key = `${refDate.getFullYear()}-${String(refDate.getMonth() + 1).padStart(2, '0')}`;
 
         if (!reportData[key]) {
@@ -1099,7 +1095,7 @@ window.validateServiceEmployee = () => {
                 count: 0,
                 foraNP: 0,
                 foraComp: 0,
-                comObs: 0,
+                retornoFIN: 0, // Novo contador mensal
                 valorTotal: 0
             };
         }
@@ -1107,23 +1103,25 @@ window.validateServiceEmployee = () => {
         const entry = reportData[key];
         entry.count++;
         entry.valorTotal += parseFloat(p.valorTotal || 0);
-        if (p.obsNF) entry.comObs++;
 
-        // --- LÓGICA DE COMPLIANCE (Replicada) ---
-        // 1. Fora NP (Dia 27+)
-        if (refDate.getDate() >= 27) {
+        // --- LÓGICA RETORNO FIN ---
+        // Se tiver observação, conta como Retorno FIN
+        if (p.obsNF && p.obsNF.trim() !== '') {
+            entry.retornoFIN++;
+            grandRetornoFIN++;
+        }
+
+        // --- LÓGICA DE COMPLIANCE ---
+        if (refDate.getDate() >= 28) { // Regra do dia 28
             entry.foraNP++;
             grandForaNP++;
         }
 
-        // 2. Fora Competência
         if (p.dataEmissao) {
             const emissaoDate = new Date(p.dataEmissao + 'T00:00:00');
-            // Calcula "número absoluto do mês": Ano * 12 + Mês
             const refMonthAbs = refDate.getFullYear() * 12 + refDate.getMonth();
             const emissaoMonthAbs = emissaoDate.getFullYear() * 12 + emissaoDate.getMonth();
             
-            // Se o mês do recebimento for maior que o mês da emissão
             if (refMonthAbs > emissaoMonthAbs) {
                 entry.foraComp++;
                 grandForaComp++;
@@ -1133,36 +1131,40 @@ window.validateServiceEmployee = () => {
         grandTotal++;
     });
 
-    // Ordenar chaves (Mês mais recente primeiro)
-    const sortedKeys = Object.keys(reportData).sort().reverse();
+    // ... (ordenação igual)
 
     // Renderizar Tabela
+    const sortedKeys = Object.keys(reportData).sort().reverse();
     if (sortedKeys.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="6" class="p-4 text-center text-gray-500">Nenhum dado de NF encontrado.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="6" class="p-4 text-center text-gray-500">Nenhum dado encontrado.</td></tr>`;
     } else {
         sortedKeys.forEach(key => {
             const d = reportData[key];
             const mesExtenso = d.monthObj.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
-            
-            // Formatar valor
             const valorFmt = d.valorTotal.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
             tbody.innerHTML += `
                 <tr class="hover:bg-gray-50 border-b border-gray-100">
                     <td class="px-4 py-3 text-sm font-bold text-gray-900 capitalize">${mesExtenso}</td>
                     <td class="px-4 py-3 text-center text-sm text-gray-700 bg-blue-50 font-bold">${d.count}</td>
-                    <td class="px-4 py-3 text-center text-sm ${d.foraNP > 0 ? 'text-orange-600 font-bold bg-orange-50' : 'text-gray-400'}">${d.foraNP}</td>
-                    <td class="px-4 py-3 text-center text-sm ${d.foraComp > 0 ? 'text-red-600 font-bold bg-red-50' : 'text-gray-400'}">${d.foraComp}</td>
-                    <td class="px-4 py-3 text-center text-sm text-gray-600">${d.comObs}</td>
+                    <td class="px-4 py-3 text-center text-sm ${d.foraNP > 0 ? 'text-orange-600 font-bold' : 'text-gray-400'}">${d.foraNP}</td>
+                    <td class="px-4 py-3 text-center text-sm ${d.foraComp > 0 ? 'text-red-600 font-bold' : 'text-gray-400'}">${d.foraComp}</td>
+                    
+                    <td class="px-4 py-3 text-center text-sm ${d.retornoFIN > 0 ? 'text-yellow-700 font-bold bg-yellow-50' : 'text-gray-400'}">${d.retornoFIN}</td>
+                    
                     <td class="px-4 py-3 text-right text-sm font-mono text-gray-700">${valorFmt}</td>
                 </tr>
             `;
         });
     }
 
-    // Renderizar Summary Cards
-    const complianceRate = grandTotal > 0 ? ((1 - ((grandForaNP + grandForaComp) / grandTotal)) * 100).toFixed(1) : 100;
+    // Renderizar Summary Cards (Agora são 5 cards se quiser incluir o Retorno FIN no topo, vamos ajustar o grid para 5 ou adicionar o card)
+    // Ajuste o HTML do grid container para 'md:grid-cols-5' se quiser todos na mesma linha, ou mantenha 4 e adicione abaixo.
+    // Vamos adicionar como um card de alerta.
     
+    // Atualiza o container para caber mais um card ou ajusta o layout
+    document.getElementById('relatorio-summary').className = "grid grid-cols-1 md:grid-cols-5 gap-4 mb-6";
+
     summary.innerHTML = `
         <div class="bg-blue-50 p-4 rounded-lg border border-blue-100">
             <div class="text-xs font-bold text-blue-500 uppercase">Total Recebidas</div>
@@ -1173,12 +1175,16 @@ window.validateServiceEmployee = () => {
             <div class="text-2xl font-bold text-orange-700">${grandForaNP}</div>
         </div>
         <div class="bg-red-50 p-4 rounded-lg border border-red-100">
-            <div class="text-xs font-bold text-red-500 uppercase">Total Fora Comp.</div>
+            <div class="text-xs font-bold text-red-500 uppercase">Fora Competência</div>
             <div class="text-2xl font-bold text-red-700">${grandForaComp}</div>
+        </div>
+        <div class="bg-yellow-50 p-4 rounded-lg border border-yellow-200">
+            <div class="text-xs font-bold text-yellow-600 uppercase">Retorno FIN</div>
+            <div class="text-2xl font-bold text-yellow-800">${grandRetornoFIN}</div>
         </div>
         <div class="bg-green-50 p-4 rounded-lg border border-green-100">
             <div class="text-xs font-bold text-green-500 uppercase">Taxa Compliance</div>
-            <div class="text-2xl font-bold text-green-700">${complianceRate}%</div>
+            <div class="text-2xl font-bold text-green-700">${(grandTotal > 0 ? ((1 - ((grandForaNP + grandForaComp + grandRetornoFIN) / grandTotal)) * 100).toFixed(1) : 100)}%</div>
         </div>
     `;
 
@@ -1638,49 +1644,66 @@ window.renderGestaoNFPage = function() {
     const perfil = currentUserProfile.perfil || "Solicitante";
     const isGestor = perfil === 'Aquisicoes' || perfil === 'Admin';
     const isRecebedor = perfil === 'Recebedor';
-    const filterType = document.getElementById('filter-nf-status') ? document.getElementById('filter-nf-status').value : 'pendente';
+    
+    // Pega o valor do filtro. Se não achar o elemento, assume 'pendente'
+    const filterEl = document.getElementById('filter-nf-status');
+    const filterType = filterEl ? filterEl.value : 'pendente';
 
-    // Status básicos rastreáveis
-    const STATUSES_TO_TRACK = ['registrado', 'aguardando-entrega', 'entregue', 'aguardando-lancamento', 'finalizado', 'em-atraso'];
-    const pedidosAtivos = state.pedidos.filter(p => STATUSES_TO_TRACK.includes(p.status));
+    // 1. STATUS QUE DEVEM APARECER NA GESTÃO DE NF
+    // Adicionei 'em-cotacao' e 'enviado-aquisicao' se tiverem RN, por segurança
+    const STATUSES_TO_TRACK = [
+        'registrado', 
+        'aguardando-entrega', 
+        'entregue', 
+        'aguardando-lancamento', 
+        'finalizado', 
+        'em-atraso'
+    ];
+
+    // Filtra pedidos ativos. 
+    // IMPORTANTE: Se o usuário selecionou "Ver Todos", mostramos até o que não está na lista padrão se tiver NF.
+    const pedidosAtivos = state.pedidos.filter(p => {
+        // Se já tem NF, sempre aparece (independente do status)
+        if (p.urlNotaFiscal) return true;
+        // Se não tem NF, precisa estar nos status monitorados
+        return STATUSES_TO_TRACK.includes(p.status);
+    });
 
     // --- FUNÇÃO AUXILIAR DE COMPLIANCE ---
     const getCompliance = (item) => {
         if (!item.urlNotaFiscal) return 'sem-nf';
-        
-        // Se não tiver data do dia salva, usa a data de emissão como fallback ou ignora
         if (!item.dataDoDia || !item.dataEmissao) return 'ok';
 
-        const dEnvio = new Date(item.dataDoDia + 'T00:00:00'); // Data que foi anexado (Data do Dia)
-        const dEmissao = new Date(item.dataEmissao + 'T00:00:00'); // Data da Nota
+        const dEnvio = new Date(item.dataDoDia + 'T00:00:00');
+        const dEmissao = new Date(item.dataEmissao + 'T00:00:00');
 
-        // 1. Regra: Fora da Competência (Anexado no mês seguinte à emissão)
-        // Lógica: Se o mês/ano do envio for maior que o mês/ano da emissão
+        // 1. Regra de Competência
         const envioMesAno = dEnvio.getFullYear() * 12 + dEnvio.getMonth();
         const emissaoMesAno = dEmissao.getFullYear() * 12 + dEmissao.getMonth();
-
         if (envioMesAno > emissaoMesAno) return 'fora-competencia';
 
-        // 2. Regra: Fora da NP (Dia 27 ao 31)
+        // 2. Regra: Fora da NP (Dia 28 a 31)
         const diaEnvio = dEnvio.getDate();
-        if (diaEnvio >= 27) return 'fora-np';
+        if (diaEnvio >= 28) return 'fora-np';
 
         return 'ok';
     };
 
-    // --- FILTRAGEM ---
+    // --- 2. APLICAR FILTROS ---
     let pedidosFiltrados = [];
 
     if (filterType === 'pendente') {
+        // Mostra itens que NÃO estão finalizados e NÃO têm NF
         pedidosFiltrados = pedidosAtivos.filter(p => p.status !== 'finalizado' && !p.urlNotaFiscal);
     } 
     else if (filterType === 'aguardando-entrega') {
+        // Mostra explicitamente itens Aguardando Entrega ou Em Atraso
         pedidosFiltrados = pedidosAtivos.filter(p => p.status === 'aguardando-entrega' || p.status === 'em-atraso');
     }
     else if (filterType === 'entregue') {
-        pedidosFiltrados = pedidosAtivos.filter(p => !!p.urlNotaFiscal || ['aguardando-lancamento', 'finalizado'].includes(p.status));
+        // Mostra itens com NF OU que já passaram da entrega
+        pedidosFiltrados = pedidosAtivos.filter(p => !!p.urlNotaFiscal || ['aguardando-lancamento', 'finalizado', 'entregue'].includes(p.status));
     }
-    // NOVOS FILTROS
     else if (filterType === 'fora-np') {
         pedidosFiltrados = pedidosAtivos.filter(p => getCompliance(p) === 'fora-np');
     }
@@ -1691,20 +1714,20 @@ window.renderGestaoNFPage = function() {
         pedidosFiltrados = pedidosAtivos.filter(p => p.obsNF && p.obsNF.trim() !== '');
     }
     else {
+        // Todos
         pedidosFiltrados = pedidosAtivos;
     }
 
     if (pedidosFiltrados.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="7" class="py-10 text-center text-gray-500">Nenhum pedido encontrado.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="7" class="py-10 text-center text-gray-500">Nenhum pedido encontrado para o filtro: <strong>${filterType}</strong>.</td></tr>`;
         return;
     }
 
-    // --- AGRUPAMENTO (RN) ---
+    // --- 3. AGRUPAMENTO (RN) ---
     const grouped = [];
     const rnMap = new Map();
 
     pedidosFiltrados.forEach(p => {
-        // Herda dados para o grupo
         const compliance = getCompliance(p);
         
         if (p.numRN) {
@@ -1721,8 +1744,8 @@ window.renderGestaoNFPage = function() {
                     nfUrl: p.urlNotaFiscal,
                     fin: p.fin,
                     dataVcto: p.dataVcto,
-                    obsNF: p.obsNF, // Obs do grupo
-                    compliance: compliance // Compliance do grupo
+                    obsNF: p.obsNF, 
+                    compliance: compliance
                 });
                 grouped.push(rnMap.get(p.numRN));
             } else {
@@ -1730,10 +1753,14 @@ window.renderGestaoNFPage = function() {
                 g.items.push(p);
                 g.total += parseFloat(p.valorTotal||0);
                 if(!!p.urlNotaFiscal) g.hasNF = true;
-                // Se algum item tiver obs, marca o grupo
                 if(p.obsNF) g.obsNF = p.obsNF;
-                // Se algum item tiver problema de compliance, marca o grupo (prioridade erro)
+                // Prioridade de erro no grupo
                 if(compliance !== 'ok' && compliance !== 'sem-nf') g.compliance = compliance;
+                
+                // Se o status do item atual for "aguardando-entrega", atualiza o grupo para refletir isso visualmente
+                if (p.status === 'aguardando-entrega' || p.status === 'em-atraso') {
+                    g.status = p.status;
+                }
             }
         } else {
             grouped.push({ 
@@ -1746,22 +1773,20 @@ window.renderGestaoNFPage = function() {
         }
     });
 
-    // --- RENDERIZAÇÃO ---
+    // --- 4. RENDERIZAÇÃO ---
     grouped.forEach(item => {
         const tr = document.createElement('tr');
         
-        // LÓGICA DE COR DO FUNDO (OBSERVAÇÃO)
-        // Se tiver observação, fundo amarelo claro. Senão, padrão hover cinza.
+        // Cor de Fundo (Retorno FIN)
         let rowClass = item.obsNF 
             ? "bg-yellow-50 hover:bg-yellow-100 border-b border-yellow-200" 
             : "hover:bg-gray-50 border-b border-gray-100";
-            
         tr.className = rowClass;
-        
-        // Tags de Compliance
+
+        // Tags
         let complianceTag = '';
         if (item.compliance === 'fora-np') {
-            complianceTag = `<span class="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-800 border border-orange-200" title="Enviado entre dia 27-31">Fora NP</span>`;
+            complianceTag = `<span class="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-800 border border-orange-200" title="Enviado entre dia 28-31">Fora NP</span>`;
         } else if (item.compliance === 'fora-competencia') {
             complianceTag = `<span class="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800 border border-red-200" title="Enviado no mês seguinte">Fora Comp.</span>`;
         }
@@ -1771,21 +1796,20 @@ window.renderGestaoNFPage = function() {
 
         // Display Observação
         const obsDisplay = item.obsNF 
-            ? `<div class="mt-1 text-[10px] text-yellow-800 font-medium bg-yellow-100/50 p-1 rounded inline-block max-w-[200px] truncate" title="${item.obsNF}">📝 ${item.obsNF}</div>` 
+            ? `<div class="mt-1 text-[10px] text-red-700 font-bold bg-white border border-red-200 p-1 rounded inline-flex items-center gap-1 max-w-[200px]" title="${item.obsNF}">
+                 <span>↩️ FIN:</span> <span class="truncate">${item.obsNF}</span>
+               </div>` 
             : '';
 
         let actionBtn = '';
         let vctoDisplay = '';
         
-        // ... (Lógica de botões idêntica ao código anterior) ...
         if (isGestor || isRecebedor) {
             if (item.hasNF) {
                 const fin = item.fin || '---';
                 const vcto = item.dataVcto ? item.dataVcto.split('-').reverse().join('/') : '---';
                 vctoDisplay = isGestor 
-                    ? `<div class="text-sm font-medium text-gray-900">${fin}</div>
-                       <div class="text-xs text-gray-500">Vcto: ${vcto}</div>
-                       ${obsDisplay}` 
+                    ? `<div class="text-sm font-medium text-gray-900">${fin}</div><div class="text-xs text-gray-500">Vcto: ${vcto}</div>${obsDisplay}` 
                     : '<div class="text-xs text-gray-400">NF Recebida</div>';
                 
                 actionBtn = `
@@ -1801,16 +1825,15 @@ window.renderGestaoNFPage = function() {
             actionBtn = '---'; vctoDisplay = '---';
         }
 
-        // Render HTML
         if (item.isGroup) {
             const st = STATUS_MAP[item.status] || { text: item.status, class: "bg-gray-100" };
             const ocDisplay = item.numOC ? `OC ${item.numOC}` : `RN ${item.numRN}`;
             const finVctoCell = isGestor ? `<td class="px-4 py-4 text-left">${vctoDisplay}</td>` : '';
             
-            // Botões do Grupo (Simplificado para o exemplo)
-            let groupActionHtml = actionBtn; 
+            // Botão de Grupo
+            let groupActionHtml = actionBtn;
             if(item.isGroup && isGestor && item.hasNF) {
-                 groupActionHtml = `<div class="flex justify-end gap-2"><a href="${item.nfUrl}" target="_blank" class="text-gray-700 px-2 border rounded text-xs bg-white">Ver NF</a><button onclick="openNFModal('${item.numRN}', true)" class="text-primary-600"><svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg></button></div>`;
+                groupActionHtml = `<div class="flex justify-end gap-2"><a href="${item.nfUrl}" target="_blank" class="text-gray-700 px-2 border rounded text-xs bg-white">Ver NF</a><button onclick="openNFModal('${item.numRN}', true)" class="text-primary-600"><svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg></button></div>`;
             }
 
             tr.innerHTML = `
@@ -1829,7 +1852,6 @@ window.renderGestaoNFPage = function() {
                 </td>
             `;
         } else {
-            // ITEM INDIVIDUAL
             const st = STATUS_MAP[item.status] || { text: item.status, class: "bg-gray-100" };
             const finVctoCell = isGestor ? `<td class="px-4 py-4 text-left">${vctoDisplay}</td>` : '';
 
@@ -3144,10 +3166,12 @@ if (filterFornSpecific) {
 }
              
              // Filter NF change (NOVO)
-             const filterNF = document.getElementById('filter-nf-status');
-             if(filterNF) { // Verifica a existência do elemento
-                 filterNF.addEventListener('change', renderGestaoNFPage);
-             }
+             // Filter NF change (CORRIGIDO)
+const filterNF = document.getElementById('filter-nf-status');
+if(filterNF) { 
+    // Usamos window.renderGestaoNFPage() explicitamente
+    filterNF.addEventListener('change', () => window.renderGestaoNFPage());
+}
              
              // Filter Fornecedor change (BUSCA)
              document.getElementById('search-fornecedor-name')?.addEventListener('input', renderFornecedoresPage);
@@ -3971,13 +3995,18 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
             </svg>
             Relatório Mensal
         </button>
-        <select id="filter-nf-status" class="block w-56 rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-white">
-            <option value="aguardando-entrega">Aguardando Entrega</option>
-            <option value="entregue">Notas Entregue</option>
-            <option value="fora-np">⚠️ Fora da NP (Dia 27-31)</option>
-            <option value="fora-competencia">⛔ Fora da Competência</option>
-            <option value="com-obs">📝 Com Observação</option>
-        </select>
+<select id="filter-nf-status" class="block w-56 rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-white">
+    <option value="pendente" selected>Aguardando Nota (Sem NF)</option>
+    
+    <option value="aguardando-entrega">Aguardando Entrega</option>
+    <option value="entregue">Notas Entregues (Todas)</option>
+    
+    <option value="fora-np">⚠️ Fora da NP (Dia 28-31)</option>
+    <option value="fora-competencia">⛔ Fora da Competência</option>
+    <option value="com-obs">↩️ Retorno FIN</option>
+    
+    <option value="todos">Ver Todos</option>
+</select>
     </div>
 
     <div class="bg-white shadow-sm border border-gray-200 rounded-lg overflow-hidden">
@@ -5023,9 +5052,9 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
                                 <tr>
                                     <th class="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase">Mês / Ano</th>
                                     <th class="px-4 py-3 text-center text-xs font-bold text-gray-500 uppercase">Total Recebidas</th>
-                                    <th class="px-4 py-3 text-center text-xs font-bold text-gray-500 uppercase text-orange-600">Fora NP (27-31)</th>
+                                    <th class="px-4 py-3 text-center text-xs font-bold text-gray-500 uppercase text-orange-600">Fora NP (28-31) </th>
                                     <th class="px-4 py-3 text-center text-xs font-bold text-gray-500 uppercase text-red-600">Fora Competência</th>
-                                    <th class="px-4 py-3 text-center text-xs font-bold text-gray-500 uppercase">Com Observação</th>
+                                    <th class="px-4 py-3 text-center text-xs font-bold text-gray-500 uppercase text-yellow-700">Retorno FIN</th>
                                     <th class="px-4 py-3 text-right text-xs font-bold text-gray-500 uppercase">Valor Total (R$)</th>
                                 </tr>
                             </thead>
