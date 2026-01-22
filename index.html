@@ -218,6 +218,7 @@ async function fetchContratos() {
                 fetchUnidades(); 
                 fetchFuncionarios();
                 fetchContratos()
+                fetchContratosRegistros();
 
                 if (currentUserProfile.perfil === 'Admin') fetchUsuarios();
                 
@@ -243,6 +244,7 @@ async function fetchContratos() {
             const solText = document.getElementById('nav-solicitacoes-text');
             const servText = document.getElementById('nav-servicos-text');
             const contratosNav = document.getElementById('nav-contratos-item');
+            const btnGerenciarFornContrato = document.getElementById('btn-gerenciar-fornecedores-contrato');
             
             // Botões da página de Contratos
             const btnNovoContrato = document.getElementById('btn-novo-contrato');
@@ -262,6 +264,7 @@ async function fetchContratos() {
             if(btnFunc) btnFunc.classList.add('hidden');
             if(btnNovoContrato) btnNovoContrato.classList.add('hidden');
             if(btnEnviarBoleto) btnEnviarBoleto.classList.add('hidden');
+            if(btnGerenciarFornContrato) btnGerenciarFornContrato.classList.add('hidden');
 
             // --- 2. CONFIGURAÇÃO POR PERFIL ---
 
@@ -292,6 +295,7 @@ async function fetchContratos() {
                 
                 if(btnFunc) btnFunc.classList.remove('hidden');
                 if(btnNovoContrato) btnNovoContrato.classList.remove('hidden'); // Admin vê Novo Contrato
+                if(btnGerenciarFornContrato) btnGerenciarFornContrato.classList.remove('hidden');
 
                 if(solText) solText.textContent = "Gestão de Suprimentos";
                 if(servText) servText.textContent = "Gestão de Serviços";
@@ -307,6 +311,8 @@ async function fetchContratos() {
                 unitNav?.classList.remove('hidden');
                 nfNav?.classList.remove('hidden');
                 contratosNav?.classList.remove('hidden');
+
+                if(btnGerenciarFornContrato) btnGerenciarFornContrato.classList.remove('hidden');
                 
                 if(btnFunc) btnFunc.classList.remove('hidden');
                 if(btnNovoContrato) btnNovoContrato.classList.remove('hidden'); // Aquisições vê Novo Contrato
@@ -3348,6 +3354,238 @@ async function fetchFuncionarios() {
              document.getElementById('pedido-results').innerHTML = '';
         };
 
+        // --- GESTÃO DE FORNECEDORES DE CONTRATO (LÓGICA) ---
+
+// 1. Variável de Estado
+state.contratosRegistros = [];
+let unsubscribeContratosRegistros = null;
+
+// 2. Fetch (Buscar dados)
+async function fetchContratosRegistros() {
+    if (unsubscribeContratosRegistros) unsubscribeContratosRegistros();
+    // Usa uma coleção nova para não misturar com pedidos ou fornecedores comuns
+    const q = query(collection(db, `artifacts/${appId}/public/data/contratos_registros`), orderBy('fornecedor'));
+    
+    unsubscribeContratosRegistros = onSnapshot(q, s => {
+        state.contratosRegistros = [];
+        s.forEach(d => state.contratosRegistros.push({id: d.id, ...d.data()}));
+        
+        // Se o modal estiver aberto, atualiza a lista
+        if(!document.getElementById('modal-gerenciar-fornecedores').classList.contains('hidden')) {
+            renderContratosRegistrosTable();
+        }
+    });
+}
+
+// Chame isso no login junto com os outros fetchs!
+// Adicione fetchContratosRegistros() dentro do onAuthStateChanged, linha ~280
+
+// 3. Renderizar Tabela
+// Substitua a função antiga por esta:
+window.renderContratosRegistrosTable = () => {
+    const tbody = document.getElementById('lista-fornecedores-contrato-body');
+    const searchInput = document.getElementById('search-contrato-fornecedor');
+    
+    if (!tbody) return;
+    tbody.innerHTML = '';
+
+    // 1. Pega o termo de busca (se o input existir)
+    const term = searchInput ? searchInput.value.toLowerCase().trim() : '';
+
+    // 2. Filtra a lista
+    const filteredList = state.contratosRegistros.filter(item => {
+        if (!term) return true; // Se não digitou nada, mostra tudo
+
+        const fornecedor = (item.fornecedor || '').toLowerCase();
+        const contrato = (item.contrato || '').toLowerCase();
+        const cnpj = (item.cnpj || '').toLowerCase();
+
+        // Busca por Nome do Fornecedor OU Nome do Contrato OU CNPJ
+        return fornecedor.includes(term) || contrato.includes(term) || cnpj.includes(term);
+    });
+
+    // 3. Verifica se está vazio
+    if (filteredList.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="5" class="py-8 text-center text-gray-500 text-sm">Nenhum registro encontrado para "<strong>${term}</strong>".</td></tr>`;
+        return;
+    }
+
+    // 4. Renderiza
+    filteredList.forEach(item => {
+        const unidadesUso = Array.isArray(item.unidadesUso) ? item.unidadesUso.join(', ') : 'Todas';
+
+        tbody.innerHTML += `
+            <tr class="hover:bg-gray-50 border-b border-gray-100 transition-colors">
+                <td class="px-4 py-3 text-sm">
+                    <div class="font-bold text-gray-900">${item.fornecedor}</div>
+                    <div class="text-xs text-gray-500">${item.cnpj}</div>
+                </td>
+                <td class="px-4 py-3 text-sm text-gray-700 font-medium">
+                    ${item.contrato}
+                </td>
+                <td class="px-4 py-3 text-sm text-gray-600">
+                    <span class="bg-blue-50 text-blue-700 px-2 py-0.5 rounded text-xs border border-blue-100">
+                        ${item.unidadeContrato}
+                    </span>
+                </td>
+                <td class="px-4 py-3 text-sm text-gray-500 text-xs">
+                    <div class="truncate max-w-xs" title="${unidadesUso}">${unidadesUso}</div>
+                </td>
+                <td class="px-4 py-3 text-right flex justify-end gap-2">
+                    <button onclick="editContratoRegistro('${item.id}')" class="text-primary-600 hover:text-primary-800 p-1 hover:bg-blue-50 rounded" title="Editar">
+                        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+                    </button>
+                    <button onclick="deleteContratoRegistro('${item.id}')" class="text-red-500 hover:text-red-700 p-1 hover:bg-red-50 rounded" title="Excluir">
+                        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                    </button>
+                </td>
+            </tr>
+        `;
+    });
+};
+
+// 4. Abrir Modal Principal
+window.openGerenciarFornecedoresModal = () => {
+    // Garante que os dados estão atualizados
+    fetchContratosRegistros(); 
+    window.renderContratosRegistrosTable();
+    window.hideFormFornecedorContrato(); // Reseta para a view de lista
+    document.getElementById('modal-gerenciar-fornecedores').classList.remove('hidden');
+};
+
+window.closeGerenciarFornecedoresModal = () => {
+    document.getElementById('modal-gerenciar-fornecedores').classList.add('hidden');
+};
+
+// 5. Mostrar Formulário (Preencher Selects)
+window.showFormFornecedorContrato = (id = null) => {
+    const form = document.getElementById('form-fornecedor-contrato');
+    const viewList = document.getElementById('view-lista-fornecedores-contrato');
+    
+    form.reset();
+    form.dataset.id = id || "";
+
+    // Popular Selects (Origem e RN)
+    const selOrigem = document.getElementById('select-unidade-contrato');
+    const selRN = document.getElementById('select-rn-unidade');
+    const divCheckboxes = document.getElementById('checkboxes-unidades-uso');
+
+    // Limpa
+    selOrigem.innerHTML = '<option value="">Selecione...</option>';
+    selRN.innerHTML = '<option value="">Selecione...</option>';
+    divCheckboxes.innerHTML = '';
+
+    // Popula Selects Simples
+    state.unidades.forEach(u => {
+        selOrigem.innerHTML += `<option value="${u}">${u}</option>`;
+        selRN.innerHTML += `<option value="${u}">${u}</option>`;
+    });
+
+    // Popula Checkboxes (Multi-select)
+    state.unidades.forEach(u => {
+        divCheckboxes.innerHTML += `
+            <label class="inline-flex items-center space-x-2 bg-white p-1 rounded border border-gray-100">
+                <input type="checkbox" name="unidadesUsoCheck" value="${u}" class="rounded text-primary-600 focus:ring-primary-500 h-4 w-4">
+                <span class="text-xs text-gray-700 truncate" title="${u}">${u}</span>
+            </label>
+        `;
+    });
+
+    // Se for edição, preencher dados
+    if (id) {
+        const item = state.contratosRegistros.find(x => x.id === id);
+        if (item) {
+            form.fornecedor.value = item.fornecedor;
+            form.cnpj.value = item.cnpj;
+            form.contrato.value = item.contrato;
+            form.unidadeContrato.value = item.unidadeContrato;
+            form.rnUnidade.value = item.rnUnidade;
+
+            // Marcar checkboxes
+            if (Array.isArray(item.unidadesUso)) {
+                const boxes = document.getElementsByName('unidadesUsoCheck');
+                boxes.forEach(box => {
+                    if (item.unidadesUso.includes(box.value)) box.checked = true;
+                });
+            }
+        }
+    }
+
+    // Alternar visibilidade
+    viewList.classList.add('hidden');
+    form.classList.remove('hidden');
+};
+
+window.hideFormFornecedorContrato = () => {
+    document.getElementById('form-fornecedor-contrato').classList.add('hidden');
+    document.getElementById('view-lista-fornecedores-contrato').classList.remove('hidden');
+};
+
+// 6. Salvar (Submit)
+document.getElementById('form-fornecedor-contrato').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    const btn = f.querySelector('button[type="submit"]');
+    const docId = f.dataset.id;
+
+    // Coletar checkboxes marcados
+    const unidadesSelecionadas = [];
+    document.getElementsByName('unidadesUsoCheck').forEach(box => {
+        if(box.checked) unidadesSelecionadas.push(box.value);
+    });
+
+    if(unidadesSelecionadas.length === 0) {
+        showNotification("Selecione pelo menos uma unidade de uso.", "error");
+        return;
+    }
+
+    btn.disabled = true; btn.textContent = "Salvando...";
+
+    const data = {
+        fornecedor: f.fornecedor.value,
+        cnpj: f.cnpj.value,
+        contrato: f.contrato.value,
+        unidadeContrato: f.unidadeContrato.value, // Select único
+        rnUnidade: f.rnUnidade.value,             // Select único
+        unidadesUso: unidadesSelecionadas,        // Array
+        updatedAt: Timestamp.now()
+    };
+
+    try {
+        if (docId) {
+            await updateDoc(doc(db, `artifacts/${appId}/public/data/contratos_registros`, docId), data);
+            showNotification("Registro atualizado!", "success");
+        } else {
+            data.createdAt = Timestamp.now();
+            await addDoc(collection(db, `artifacts/${appId}/public/data/contratos_registros`), data);
+            showNotification("Novo fornecedor de contrato cadastrado!", "success");
+        }
+        window.hideFormFornecedorContrato();
+    } catch (err) {
+        console.error(err);
+        showNotification("Erro ao salvar.", "error");
+    } finally {
+        btn.disabled = false; btn.textContent = "Salvar Registro";
+    }
+});
+
+// 7. Editar e Excluir
+window.editContratoRegistro = (id) => {
+    window.showFormFornecedorContrato(id);
+};
+
+window.deleteContratoRegistro = (id) => {
+    showConfirmationModal("Deseja remover este fornecedor da lista de contratos?", async () => {
+        try {
+            await deleteDoc(doc(db, `artifacts/${appId}/public/data/contratos_registros`, id));
+            showNotification("Registro removido.", "success");
+        } catch(e) {
+            showNotification("Erro ao remover.", "error");
+        }
+    });
+};
+
+
         // --- INIT LISTENERS ---
         document.addEventListener('DOMContentLoaded', () => {
              // Login
@@ -4457,6 +4695,16 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
             Enviar Boleto / Fatura
         </button>
 
+        <div class="flex gap-2"> 
+        <button id="btn-gerenciar-fornecedores-contrato" onclick="openGerenciarFornecedoresModal()" class="hidden inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 focus:outline-none">
+    <svg class="mr-2 -ml-1 h-5 w-5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+            </svg>
+    Gerenciar Fornecedores
+</button>
+        </button>
+    </div>
+
     </div>
 </div>
 
@@ -5399,6 +5647,105 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
                     <button type="button" onclick="document.getElementById('modal-relatorio').classList.add('hidden')" class="mt-3 inline-flex w-full justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-base font-medium text-gray-700 shadow-sm hover:bg-gray-50 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">Fechar</button>
                     <button type="button" onclick="window.print()" class="inline-flex w-full justify-center rounded-md border border-transparent bg-primary-600 px-4 py-2 text-base font-medium text-white shadow-sm hover:bg-primary-700 sm:ml-3 sm:w-auto sm:text-sm">Imprimir Relatório</button>
                 </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div id="modal-gerenciar-fornecedores" class="relative z-50 hidden">
+    <div class="fixed inset-0 bg-gray-900/75 backdrop-blur-sm transition-opacity"></div>
+    <div class="fixed inset-0 z-10 overflow-y-auto">
+        <div class="flex min-h-full items-center justify-center p-4">
+            <div class="bg-white rounded-lg shadow-xl w-full max-w-5xl p-6">
+                
+                <div class="flex justify-between items-center mb-6 border-b pb-4">
+                    <h3 class="text-xl font-bold text-gray-900">Fornecedores Homologados (Contratos)</h3>
+                    <button onclick="closeGerenciarFornecedoresModal()" class="text-gray-400 hover:text-gray-500">
+                        <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+                    </button>
+                </div>
+
+                <div id="view-lista-fornecedores-contrato">
+    
+    <div class="flex flex-col md:flex-row justify-between items-center mb-4 gap-4">
+        <div class="w-full md:w-2/3">
+            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Buscar Fornecedor ou Contrato</label>
+            <div class="relative">
+                <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                    <svg class="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                    </svg>
+                </div>
+                <input type="text" id="search-contrato-fornecedor" 
+                       oninput="window.renderContratosRegistrosTable()" 
+                       placeholder="Digite o nome ou nº do contrato..." 
+                       class="block w-full pl-10 rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-gray-50 focus:bg-white transition-colors">
+            </div>
+        </div>
+
+        <div class="w-full md:w-auto flex justify-end mt-4 md:mt-0">
+            <button onclick="showFormFornecedorContrato()" class="bg-primary-600 text-white px-4 py-2 rounded shadow text-sm font-bold hover:bg-primary-700 flex items-center gap-2">
+                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" /></svg>
+                Novo Cadastro
+            </button>
+        </div>
+    </div>
+
+    <div class="overflow-hidden rounded-lg border border-gray-200">
+        <table class="min-w-full divide-y divide-gray-200">
+            <thead class="bg-gray-100">
+                <tr>
+                    <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Fornecedor / CNPJ</th>
+                    <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Contrato</th>
+                    <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Unidade Origem</th>
+                    <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Unidades de Uso</th>
+                    <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">Ações</th>
+                </tr>
+            </thead>
+            <tbody id="lista-fornecedores-contrato-body" class="bg-white divide-y divide-gray-200"></tbody>
+        </table>
+    </div>
+</div>
+
+                <form id="form-fornecedor-contrato" class="hidden space-y-4">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        
+                        <div>
+                            <label class="block text-xs font-bold text-gray-700 uppercase mb-1">Fornecedor</label>
+                            <input name="fornecedor" required class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-gray-700 uppercase mb-1">CNPJ</label>
+                            <input name="cnpj" required class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-gray-700 uppercase mb-1">Contrato (Nome/Nº)</label>
+                            <input name="contrato" required class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border">
+                        </div>
+
+                        <div>
+                            <label class="block text-xs font-bold text-gray-700 uppercase mb-1">Unidade do Contrato (Origem)</label>
+                            <select name="unidadeContrato" id="select-unidade-contrato" required class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-white"></select>
+                        </div>
+
+                        <div>
+                            <label class="block text-xs font-bold text-gray-700 uppercase mb-1">RN Unidade</label>
+                            <select name="rnUnidade" id="select-rn-unidade" required class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-white"></select>
+                        </div>
+                    </div>
+
+                    <div class="mt-4">
+                        <label class="block text-xs font-bold text-gray-700 uppercase mb-2">Unidades que podem utilizar (Selecione)</label>
+                        <div id="checkboxes-unidades-uso" class="grid grid-cols-2 md:grid-cols-4 gap-2 bg-gray-50 p-3 rounded border border-gray-200 max-h-40 overflow-y-auto">
+                            </div>
+                    </div>
+
+                    <div class="flex justify-end gap-2 pt-4 border-t mt-4">
+                        <button type="button" onclick="hideFormFornecedorContrato()" class="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50">Cancelar</button>
+                        <button type="submit" class="px-4 py-2 bg-primary-600 text-white rounded-md text-sm font-medium hover:bg-primary-700 shadow-sm">Salvar Registro</button>
+                    </div>
+                </form>
+
             </div>
         </div>
     </div>
