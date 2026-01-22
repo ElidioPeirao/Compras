@@ -437,6 +437,110 @@ async function fetchContratos() {
         }
         
 
+window.onProcessSupplierChange = () => {
+    const fid = document.getElementById('proc-select-fornecedor').value;
+    const fornecedor = state.contratosRegistros.find(f => f.id === fid);
+    const tbody = document.getElementById('proc-items-tbody');
+    
+    // Limpa campos
+    if(!fornecedor) {
+        tbody.innerHTML = '<tr><td colspan="4" class="p-4 text-center text-xs text-gray-400">Selecione um fornecedor.</td></tr>';
+        ['proc-cnpj', 'proc-contrato-base', 'proc-fluxo', 'proc-pagamento', 
+         'proc-origem', 'proc-rn-unidade', 'proc-descricao', 'proc-justificativa', 'proc-obs-geral']
+         .forEach(id => document.getElementById(id).value = '');
+        return;
+    }
+
+    // Preenche dados do fornecedor
+    document.getElementById('proc-cnpj').value = fornecedor.cnpj || '';
+    document.getElementById('proc-contrato-base').value = fornecedor.contrato || '';
+    document.getElementById('proc-fluxo').value = fornecedor.fluxoNota || '';
+    document.getElementById('proc-pagamento').value = fornecedor.pagamento || '';
+    document.getElementById('proc-origem').value = fornecedor.unidadeContrato || '';
+    document.getElementById('proc-rn-unidade').value = fornecedor.rnUnidade || '';
+    document.getElementById('proc-descricao').value = fornecedor.descricao || '';
+    document.getElementById('proc-justificativa').value = fornecedor.justificativa || ''; 
+    document.getElementById('proc-obs-geral').value = fornecedor.observacao || '';
+
+    // Gera Tabela de Itens
+    tbody.innerHTML = '';
+    if (fornecedor.itensContrato && Array.isArray(fornecedor.itensContrato) && fornecedor.itensContrato.length > 0) {
+        fornecedor.itensContrato.forEach((item, idx) => {
+            const desc = typeof item === 'object' ? item.descricao : item;
+            
+            // Cada linha tem inputs específicos
+            tbody.innerHTML += `
+                <tr class="hover:bg-blue-50 transition-colors">
+                    <td class="px-3 py-2 align-middle">
+                        <input type="checkbox" class="item-check h-4 w-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500" 
+                               data-idx="${idx}" onchange="window.toggleRowInputs(this)">
+                    </td>
+                    <td class="px-3 py-2 text-sm text-gray-700 align-middle">
+                        ${desc}
+                        <input type="hidden" id="desc-${idx}" value="${desc}">
+                    </td>
+                    <td class="px-3 py-2 align-middle">
+                        <input type="number" step="0.01" id="val-${idx}" class="block w-full rounded border-gray-300 text-sm p-1 disabled:bg-gray-100 disabled:text-gray-400" 
+                               placeholder="0.00" disabled oninput="window.checkTotalMatch()">
+                    </td>
+                    <td class="px-3 py-2 align-middle">
+                        <input type="text" id="rn-${idx}" class="block w-full rounded border-gray-300 text-sm p-1 disabled:bg-gray-100 disabled:text-gray-400" 
+                               placeholder="RN..." disabled>
+                    </td>
+                </tr>
+            `;
+        });
+    } else {
+        tbody.innerHTML = '<tr><td colspan="4" class="p-4 text-center text-xs text-red-500 font-bold">Sem itens cadastrados.</td></tr>';
+    }
+};
+
+// Funções Auxiliares para a Nova Tabela
+window.toggleRowInputs = (checkbox) => {
+    const idx = checkbox.dataset.idx;
+    const valInput = document.getElementById(`val-${idx}`);
+    const rnInput = document.getElementById(`rn-${idx}`);
+    const row = checkbox.closest('tr');
+
+    if (checkbox.checked) {
+        valInput.disabled = false;
+        rnInput.disabled = false;
+        row.classList.add('bg-blue-50');
+    } else {
+        valInput.disabled = true;
+        rnInput.disabled = true;
+        valInput.value = '';
+        rnInput.value = '';
+        row.classList.remove('bg-blue-50');
+    }
+    window.checkTotalMatch();
+};
+
+window.checkTotalMatch = () => {
+    const totalNota = parseFloat(document.getElementById('proc-valor-total-nota').value) || 0;
+    let somaItens = 0;
+
+    document.querySelectorAll('.item-check:checked').forEach(cb => {
+        const idx = cb.dataset.idx;
+        const val = parseFloat(document.getElementById(`val-${idx}`).value) || 0;
+        somaItens += val;
+    });
+
+    const elSoma = document.getElementById('proc-soma-itens');
+    elSoma.textContent = `R$ ${somaItens.toFixed(2)}`;
+
+    if (Math.abs(totalNota - somaItens) < 0.01 && totalNota > 0) {
+        elSoma.className = "p-2 bg-green-50 border border-green-200 rounded text-sm font-bold text-green-700";
+        elSoma.innerHTML = `R$ ${somaItens.toFixed(2)} (OK)`;
+    } else if (totalNota > 0) {
+        elSoma.className = "p-2 bg-red-50 border border-red-200 rounded text-sm font-bold text-red-700";
+        elSoma.innerHTML = `R$ ${somaItens.toFixed(2)} (Dif: ${(totalNota - somaItens).toFixed(2)})`;
+    } else {
+        elSoma.className = "p-2 bg-white border border-gray-200 rounded text-sm font-bold text-gray-400";
+    }
+};
+
+
 window.deleteServico = (id) => {
     showConfirmationModal("Tem certeza que deseja excluir esta solicitação de serviço? Esta ação não pode ser desfeita.", async () => {
         try {
@@ -3751,64 +3855,78 @@ window.deleteContratoRegistro = (id) => {
 
 // 1. Abrir Modal e Carregar Listas
 // 1. Abrir Modal e Carregar Listas (ATUALIZADA)
+// 1. Abrir Modal e Carregar Listas (CORRIGIDA: Filtra Cancelados)
+// --- SUBSTITUA A FUNÇÃO window.openProcessarContratoModal POR ESTA ---
 window.openProcessarContratoModal = () => {
     const f = document.getElementById('form-processar-contrato');
     if(!f) return;
     f.reset();
     
-    // Limpa campos visuais
-    document.getElementById('proc-items-container').innerHTML = '<p class="text-xs text-gray-400 italic p-2">Selecione um fornecedor para ver os itens.</p>';
-    document.getElementById('proc-boleto-info').textContent = 'Selecione para ver o arquivo anexo.';
+    // --- CORREÇÃO AQUI: ---
+    // Removemos a referência ao 'proc-items-container' que não existe e limpamos o tbody diretamente
+    const tbody = document.getElementById('proc-items-tbody');
+    if (tbody) {
+        tbody.innerHTML = '<tr><td colspan="4" class="p-4 text-center text-xs text-gray-400">Selecione um fornecedor para ver os itens.</td></tr>';
+    }
+    // ----------------------
+
+    const infoBoleto = document.getElementById('proc-boleto-info');
+    if (infoBoleto) infoBoleto.textContent = 'Selecione para ver o arquivo anexo.';
     
-    // Limpa campos do Boleto
-    document.getElementById('proc-bol-unidade').value = '';
-    document.getElementById('proc-bol-cr').value = '';
-    document.getElementById('proc-bol-projeto').value = '';
+    // Limpa campos do Boleto (Agora eles existem no HTML, então não dará erro)
+    if(document.getElementById('proc-bol-unidade')) document.getElementById('proc-bol-unidade').value = '';
+    if(document.getElementById('proc-bol-cr')) document.getElementById('proc-bol-cr').value = '';
+    if(document.getElementById('proc-bol-projeto')) document.getElementById('proc-bol-projeto').value = '';
 
     // Limpa campos do Fornecedor
     ['proc-cnpj', 'proc-contrato-base', 'proc-fluxo', 'proc-pagamento', 
      'proc-origem', 'proc-rn-unidade', 'proc-descricao', 'proc-justificativa', 'proc-obs-geral']
-     .forEach(id => document.getElementById(id).value = '');
+     .forEach(id => {
+         const el = document.getElementById(id);
+         if(el) el.value = '';
+     });
 
     // A. Popula Boletos Pendentes
     const selBoleto = document.getElementById('proc-select-boleto');
     selBoleto.innerHTML = '<option value="">-- Selecione o Boleto --</option>';
     
-    const boletosPendentes = state.contratos.filter(c => c.tipo === 'Boleto');
+    const boletosPendentes = state.contratos.filter(c => c.tipo === 'Boleto' && c.status !== 'Cancelado');
     
     if(boletosPendentes.length === 0) {
-        selBoleto.innerHTML = '<option value="">Nenhum boleto pendente.</option>';
+        selBoleto.innerHTML = '<option value="">Nenhum boleto pendente disponível.</option>';
     } else {
         boletosPendentes.forEach(b => {
             const desc = b.descricao || 'Sem descrição';
-            selBoleto.innerHTML += `<option value="${b.id}">${desc} (Vcto: ${b.vencimento || '-'})</option>`;
+            let dataStr = '';
+            if(b.vencimento) {
+                const parts = b.vencimento.split('-'); 
+                if(parts.length === 3) dataStr = ` | Vcto: ${parts[2]}/${parts[1]}`;
+            }
+            selBoleto.innerHTML += `<option value="${b.id}">${desc} (${b.unidade})${dataStr}</option>`;
         });
     }
 
-    // LISTENER DE MUDANÇA DO BOLETO (Puxar CR, Projeto, Unidade)
+    // LISTENER DE MUDANÇA DO BOLETO
     selBoleto.onchange = () => {
         const bid = selBoleto.value;
         const bol = state.contratos.find(x => x.id === bid);
         const info = document.getElementById('proc-boleto-info');
         
         if(bol) {
-            // Mostra Link
             if(bol.urlArquivo) {
                 info.innerHTML = `<a href="${bol.urlArquivo}" target="_blank" class="text-blue-600 underline font-bold">Ver Boleto Anexado 🔗</a>`;
             } else {
                 info.textContent = 'Boleto sem arquivo anexado.';
             }
-
-            // Puxa Dados do Boleto para os campos readonly
-            document.getElementById('proc-bol-unidade').value = bol.unidade || '-';
-            document.getElementById('proc-bol-cr').value = bol.cr || '-';
-            document.getElementById('proc-bol-projeto').value = bol.projeto || '-';
-
+            // Puxa Dados do Boleto
+            if(document.getElementById('proc-bol-unidade')) document.getElementById('proc-bol-unidade').value = bol.unidade || '-';
+            if(document.getElementById('proc-bol-cr')) document.getElementById('proc-bol-cr').value = bol.cr || '-';
+            if(document.getElementById('proc-bol-projeto')) document.getElementById('proc-bol-projeto').value = bol.projeto || '-';
         } else {
             info.textContent = 'Selecione para ver o arquivo anexo.';
-            document.getElementById('proc-bol-unidade').value = '';
-            document.getElementById('proc-bol-cr').value = '';
-            document.getElementById('proc-bol-projeto').value = '';
+            if(document.getElementById('proc-bol-unidade')) document.getElementById('proc-bol-unidade').value = '';
+            if(document.getElementById('proc-bol-cr')) document.getElementById('proc-bol-cr').value = '';
+            if(document.getElementById('proc-bol-projeto')) document.getElementById('proc-bol-projeto').value = '';
         }
     };
 
@@ -3822,51 +3940,6 @@ window.openProcessarContratoModal = () => {
     document.getElementById('modal-processar-contrato').classList.remove('hidden');
 };
 
-// 2. Ao selecionar Fornecedor -> Preenche dados (ATUALIZADA com Justificativa Visível)
-window.onProcessSupplierChange = () => {
-    const fid = document.getElementById('proc-select-fornecedor').value;
-    const fornecedor = state.contratosRegistros.find(f => f.id === fid);
-    const container = document.getElementById('proc-items-container');
-    
-    // Limpa campos se não houver fornecedor
-    if(!fornecedor) {
-        container.innerHTML = '';
-        ['proc-cnpj', 'proc-contrato-base', 'proc-fluxo', 'proc-pagamento', 
-         'proc-origem', 'proc-rn-unidade', 'proc-descricao', 'proc-justificativa', 'proc-obs-geral']
-         .forEach(id => document.getElementById(id).value = '');
-        return;
-    }
-
-    // --- PREENCHE TODOS OS CAMPOS AUTOMÁTICOS ---
-    document.getElementById('proc-cnpj').value = fornecedor.cnpj || '';
-    document.getElementById('proc-contrato-base').value = fornecedor.contrato || '';
-    document.getElementById('proc-fluxo').value = fornecedor.fluxoNota || '';
-    document.getElementById('proc-pagamento').value = fornecedor.pagamento || '';
-    document.getElementById('proc-origem').value = fornecedor.unidadeContrato || '';
-    document.getElementById('proc-rn-unidade').value = fornecedor.rnUnidade || '';
-    document.getElementById('proc-descricao').value = fornecedor.descricao || '';
-    
-    // AGORA PREENCHE A JUSTIFICATIVA VISÍVEL
-    document.getElementById('proc-justificativa').value = fornecedor.justificativa || ''; 
-    document.getElementById('proc-obs-geral').value = fornecedor.observacao || ''; // Hidden input
-
-    // --- GERA OS CHECKBOXES DOS ITENS ---
-    container.innerHTML = '';
-    if (fornecedor.itensContrato && Array.isArray(fornecedor.itensContrato) && fornecedor.itensContrato.length > 0) {
-        fornecedor.itensContrato.forEach((item, idx) => {
-            const desc = typeof item === 'object' ? item.descricao : item;
-            container.innerHTML += `
-                <label class="flex items-start gap-2 p-2 hover:bg-gray-50 rounded border-b border-gray-100 last:border-0 cursor-pointer">
-                    <input type="checkbox" name="proc_itens" value="${desc}" class="mt-1 h-4 w-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500">
-                    <span class="text-sm text-gray-700">${desc}</span>
-                </label>
-            `;
-        });
-    } else {
-        container.innerHTML = '<p class="text-xs text-red-500 p-2 font-bold">Este fornecedor não possui itens cadastrados no contrato.</p>';
-    }
-};
-
 // 3. Salvar e Converter (Boleto -> Contrato)
 // A. ATUALIZAR O SUBMIT (SALVAR NO BANCO)
 document.getElementById('form-processar-contrato').addEventListener('submit', async (e) => {
@@ -3874,20 +3947,48 @@ document.getElementById('form-processar-contrato').addEventListener('submit', as
     const btn = e.target.querySelector('button[type="submit"]');
     const boletoId = document.getElementById('proc-select-boleto').value;
     const fornecedorId = document.getElementById('proc-select-fornecedor').value;
-    
+    const valorTotalNota = parseFloat(document.getElementById('proc-valor-total-nota').value) || 0;
+
     if(!boletoId) return showNotification("Selecione um boleto.", "error");
     if(!fornecedorId) return showNotification("Selecione um fornecedor.", "error");
+    if(valorTotalNota <= 0) return showNotification("Informe o valor total da nota.", "error");
 
-    // Coleta Itens
-    const itensSelecionados = [];
-    document.querySelectorAll('input[name="proc_itens"]:checked').forEach(cb => {
-        itensSelecionados.push(cb.value);
+    // Coleta Itens Selecionados e seus dados
+    const itensDetalhados = [];
+    let somaValidacao = 0;
+
+    const checkboxes = document.querySelectorAll('.item-check:checked');
+    if(checkboxes.length === 0) return showNotification("Selecione pelo menos um item.", "error");
+
+    let erroValidacao = false;
+    checkboxes.forEach(cb => {
+        const idx = cb.dataset.idx;
+        const desc = document.getElementById(`desc-${idx}`).value;
+        const val = parseFloat(document.getElementById(`val-${idx}`).value);
+        const rn = document.getElementById(`rn-${idx}`).value.trim();
+
+        if (isNaN(val) || val <= 0) erroValidacao = true;
+        
+        somaValidacao += val;
+
+        itensDetalhados.push({
+            descricao: desc,
+            valor: val,
+            rn: rn || 'N/A' // Permite salvar sem RN se necessário, ou adicione validação
+        });
     });
-    if(itensSelecionados.length === 0) return showNotification("Selecione pelo menos um item.", "error");
 
-    // Pega o objeto completo do fornecedor
+    if (erroValidacao) return showNotification("Preencha o valor para todos os itens selecionados.", "error");
+
+    // Validação de Soma (Opcional: Pode ser apenas um aviso)
+    if (Math.abs(valorTotalNota - somaValidacao) > 0.1) {
+        if(!confirm(`A soma dos itens (R$ ${somaValidacao}) não bate com o total da nota (R$ ${valorTotalNota}). Deseja salvar mesmo assim?`)) {
+            return;
+        }
+    }
+
     const fData = state.contratosRegistros.find(f => f.id === fornecedorId);
-    const fForm = e.target; // O formulário
+    const fForm = e.target; 
 
     btn.disabled = true; btn.textContent = "Salvando...";
 
@@ -3898,7 +3999,7 @@ document.getElementById('form-processar-contrato').addEventListener('submit', as
             processedAt: Timestamp.now(),
             processedBy: currentUserProfile.nome,
 
-            // --- TODOS OS CAMPOS SOLICITADOS ---
+            // Dados Fixo do Fornecedor
             fornecedorNome: fData.fornecedor,
             fornecedorCNPJ: fData.cnpj,
             contratoBase: fData.contrato,
@@ -3910,11 +4011,15 @@ document.getElementById('form-processar-contrato').addEventListener('submit', as
             justificativa: fData.justificativa,
             observacaoGeral: fData.observacao,
             
-            // Dados Variáveis (Desta Execução)
-            itensProcessados: itensSelecionados,
-            numRN: fForm.numRN.value,
+            // Dados Variáveis
+            valorTotalNota: valorTotalNota,
+            itensDetalhados: itensDetalhados, // ARRAY NOVO COM VALORES E RNS
             dataRN: fForm.dataRN.value,
-            apontamento: fForm.apontamento.value
+            apontamento: fForm.apontamento.value,
+            
+            // Campos legados para compatibilidade de busca
+            numRN: itensDetalhados.map(i => i.rn).join(', '), 
+            itensProcessados: itensDetalhados.map(i => `${i.descricao} (R$ ${i.valor})`) 
         };
 
         await updateDoc(doc(db, `artifacts/${appId}/public/data/contratos`, boletoId), updateData);
@@ -3938,129 +4043,88 @@ window.openDetalhesContrato = (id) => {
 
     const div = document.getElementById('conteudo-detalhes-contrato');
     
-    // 1. Formatação de Datas
-    let dataProcessamento = '-';
-    if(c.processedAt) {
-        try {
-            dataProcessamento = c.processedAt.toDate().toLocaleDateString('pt-BR') + ' às ' + c.processedAt.toDate().toLocaleTimeString('pt-BR');
-        } catch(e) { dataProcessamento = 'Data inválida'; }
+    // Lista de Itens (Tabela Bonita)
+    let tabelaItensHtml = '<span class="italic text-gray-400">Nenhum item registrado.</span>';
+    
+    if (c.itensDetalhados && c.itensDetalhados.length > 0) {
+        tabelaItensHtml = `
+            <table class="min-w-full text-xs text-left">
+                <thead class="bg-gray-100 font-bold text-gray-600">
+                    <tr>
+                        <th class="p-2">Item</th>
+                        <th class="p-2 text-right">Valor</th>
+                        <th class="p-2 text-right">RN</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100">
+                    ${c.itensDetalhados.map(i => `
+                        <tr>
+                            <td class="p-2">${i.descricao}</td>
+                            <td class="p-2 text-right font-mono">R$ ${parseFloat(i.valor).toFixed(2)}</td>
+                            <td class="p-2 text-right">${i.rn}</td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+                <tfoot class="bg-gray-50 font-bold">
+                    <tr>
+                        <td class="p-2 text-right">Total Nota:</td>
+                        <td class="p-2 text-right text-blue-700">R$ ${parseFloat(c.valorTotalNota || 0).toFixed(2)}</td>
+                        <td></td>
+                    </tr>
+                </tfoot>
+            </table>
+        `;
+    } else if (c.itensProcessados) {
+        // Fallback para legado
+        tabelaItensHtml = `<ul class="list-disc pl-5 text-sm">${c.itensProcessados.map(i => `<li>${i}</li>`).join('')}</ul>`;
     }
 
-    let dataRNFormatada = '-';
-    if(c.dataRN) {
-        dataRNFormatada = c.dataRN.split('-').reverse().join('/');
-    }
+    const dataRN = c.dataRN ? c.dataRN.split('-').reverse().join('/') : '-';
 
-    // 2. Renderização da Lista de Itens
-    const itensHtml = (c.itensProcessados && c.itensProcessados.length > 0) ? 
-        `<ul class="list-disc pl-5 space-y-1 text-gray-700">${c.itensProcessados.map(i => `<li>${i}</li>`).join('')}</ul>` 
-        : '<span class="italic text-gray-400">Nenhum item registrado especificamente.</span>';
-
-    // 3. Renderização do Botão de Arquivo
-    const arquivoBtn = c.urlArquivo ? 
-        `<a href="${c.urlArquivo}" target="_blank" class="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded shadow hover:bg-blue-700 transition-colors">
-            <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
-            <span>Visualizar Boleto/Anexo Original</span>
-         </a>` 
-        : '<span class="text-red-500 font-bold">Sem arquivo anexado.</span>';
-
-    // 4. Montagem do HTML Completo
     div.innerHTML = `
         <div class="space-y-6">
-            
-            <div class="bg-gray-50 p-4 rounded-lg border border-gray-200 flex flex-col md:flex-row justify-between items-center gap-4">
+            <div class="bg-gray-50 p-4 rounded-lg border border-gray-200 flex justify-between items-center">
                 <div>
-                    <span class="text-xs text-gray-500 uppercase font-bold tracking-wider">Status Atual</span>
+                    <span class="text-xs text-gray-500 uppercase font-bold">Status</span>
                     <div class="flex items-center gap-2">
                         <span class="w-3 h-3 rounded-full bg-green-500"></span>
                         <span class="text-xl font-bold text-gray-800">${c.status || 'Processado'}</span>
                     </div>
                 </div>
-                <div>
-                    ${arquivoBtn}
-                </div>
+                ${c.urlArquivo ? `<a href="${c.urlArquivo}" target="_blank" class="bg-blue-600 text-white px-3 py-2 rounded text-xs font-bold hover:bg-blue-700 flex items-center gap-1">📄 Ver Arquivo</a>` : ''}
             </div>
 
-            <div>
-                <h4 class="text-sm font-bold text-gray-900 uppercase border-b pb-2 mb-3">Dados do Contrato (Fornecedor)</h4>
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-                    <div class="bg-white p-3 border rounded">
-                        <span class="block text-xs text-gray-500 font-bold uppercase">Fornecedor</span>
-                        <span class="text-gray-900 font-medium">${c.fornecedorNome || c.descricao || '-'}</span>
-                    </div>
-                    <div class="bg-white p-3 border rounded">
-                        <span class="block text-xs text-gray-500 font-bold uppercase">CNPJ</span>
-                        <span class="text-gray-900">${c.fornecedorCNPJ || '-'}</span>
-                    </div>
-                    <div class="bg-white p-3 border rounded">
-                        <span class="block text-xs text-gray-500 font-bold uppercase">Contrato Base</span>
-                        <span class="text-gray-900">${c.contratoBase || '-'}</span>
-                    </div>
-                    <div class="bg-white p-3 border rounded">
-                        <span class="block text-xs text-gray-500 font-bold uppercase">Unidade Origem</span>
-                        <span class="text-gray-900">${c.unidadeContrato || '-'}</span>
-                    </div>
-                    <div class="bg-white p-3 border rounded">
-                        <span class="block text-xs text-gray-500 font-bold uppercase">Fluxo de Nota</span>
-                        <span class="text-gray-900">${c.fluxoNota || '-'}</span>
-                    </div>
-                    <div class="bg-white p-3 border rounded">
-                        <span class="block text-xs text-gray-500 font-bold uppercase">Condição de Pagamento</span>
-                        <span class="text-gray-900">${c.pagamento || '-'}</span>
-                    </div>
-                    <div class="col-span-1 md:col-span-2 bg-white p-3 border rounded">
-                        <span class="block text-xs text-gray-500 font-bold uppercase">Descrição do Serviço/Contrato</span>
-                        <span class="text-gray-900">${c.descricaoContrato || c.descricao || '-'}</span>
-                    </div>
-                </div>
+            <div class="grid grid-cols-2 gap-4 text-sm bg-white border rounded p-4">
+                 <div class="col-span-2 text-xs font-bold text-gray-400 uppercase border-b pb-1 mb-2">Dados do Fornecedor</div>
+                 <div><span class="text-gray-500 text-xs block">Fornecedor</span><span class="font-bold">${c.fornecedorNome || '-'}</span></div>
+                 <div><span class="text-gray-500 text-xs block">Contrato</span><span class="font-bold">${c.contratoBase || '-'}</span></div>
+                 <div><span class="text-gray-500 text-xs block">CNPJ</span><span>${c.fornecedorCNPJ || '-'}</span></div>
+                 <div><span class="text-gray-500 text-xs block">Fluxo</span><span>${c.fluxoNota || '-'}</span></div>
+                 <div class="col-span-2"><span class="text-gray-500 text-xs block">Descrição</span><span>${c.descricaoContrato || '-'}</span></div>
             </div>
 
-            <div>
-                <h4 class="text-sm font-bold text-orange-700 uppercase border-b border-orange-200 pb-2 mb-3">Dados da Execução (Processamento)</h4>
-                <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm bg-orange-50 p-4 rounded border border-orange-100">
-                    <div>
-                        <span class="block text-xs text-orange-800 font-bold uppercase">Número da RN</span>
-                        <span class="text-lg font-bold text-gray-900">${c.numRN || 'Pend.'}</span>
-                    </div>
-                    <div>
-                        <span class="block text-xs text-orange-800 font-bold uppercase">Data da RN</span>
-                        <span class="text-lg font-bold text-gray-900">${dataRNFormatada}</span>
-                    </div>
-                    <div>
-                        <span class="block text-xs text-orange-800 font-bold uppercase">RN Unidade</span>
-                        <span class="text-gray-900 font-medium">${c.rnUnidade || '-'}</span>
-                    </div>
-                    <div class="col-span-1 md:col-span-3 mt-2">
-                        <span class="block text-xs text-orange-800 font-bold uppercase">Apontamento / Observações da Execução</span>
-                        <p class="text-gray-800 bg-white p-2 rounded border border-orange-200 mt-1">${c.apontamento || 'Sem apontamentos.'}</p>
-                    </div>
-                </div>
+            <div class="border rounded p-4">
+                <div class="text-xs font-bold text-gray-400 uppercase border-b pb-1 mb-2">Detalhamento Financeiro (Itens)</div>
+                ${tabelaItensHtml}
             </div>
 
-            <div>
-                <h4 class="text-sm font-bold text-gray-900 uppercase border-b pb-2 mb-3">Itens Processados</h4>
-                <div class="bg-gray-50 p-4 rounded border border-gray-200">
-                    ${itensHtml}
-                </div>
+            <div class="bg-orange-50 border border-orange-100 rounded p-4 text-sm">
+                 <div class="text-xs font-bold text-orange-800 uppercase border-b border-orange-200 pb-1 mb-2">Dados da Execução</div>
+                 <div class="grid grid-cols-2 gap-2">
+                    <div><span class="text-xs text-orange-600 block">Data de Referência</span><span class="font-bold">${dataRN}</span></div>
+                    <div><span class="text-xs text-orange-600 block">Apontamento</span><span class="bg-white p-1 rounded border border-orange-200 block">${c.apontamento || '-'}</span></div>
+                 </div>
             </div>
 
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                    <h4 class="text-xs font-bold text-gray-500 uppercase mb-2">Justificativa da Contratação</h4>
-                    <p class="text-sm text-gray-600 bg-gray-50 p-3 rounded border h-full">${c.justificativa || 'Não informada.'}</p>
+            <details class="text-xs border rounded p-2">
+                <summary class="font-bold text-gray-500 cursor-pointer">Ver Justificativa e Obs</summary>
+                <div class="mt-2 space-y-2 p-2 bg-gray-50">
+                    <p><strong>Justificativa:</strong> ${c.justificativa || '-'}</p>
+                    <p><strong>Obs:</strong> ${c.observacaoGeral || '-'}</p>
                 </div>
-                <div>
-                    <h4 class="text-xs font-bold text-gray-500 uppercase mb-2">Observações Gerais do Contrato</h4>
-                    <p class="text-sm text-gray-600 bg-gray-50 p-3 rounded border h-full">${c.observacaoGeral || 'Não informada.'}</p>
-                </div>
-            </div>
-
-            <div class="text-xs text-gray-400 text-right border-t pt-2 mt-4">
-                Processado por <strong>${c.processedBy || 'Sistema'}</strong> em ${dataProcessamento}.
-            </div>
+            </details>
         </div>
     `;
-
     document.getElementById('modal-detalhes-contrato').classList.remove('hidden');
 };
 
@@ -5178,7 +5242,7 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
             <svg class="-ml-1 mr-2 h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
             </svg>
-            Enviar Boleto / Fatura
+            Enviar Boleto / Nota
         </button>
 
         <div class="flex gap-2"> 
@@ -5234,7 +5298,7 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
     <div class="fixed inset-0 bg-gray-900/75 backdrop-blur-sm transition-opacity"></div>
     <div class="fixed inset-0 z-10 flex items-center justify-center p-4">
         <div class="bg-white rounded-lg shadow-xl w-full max-w-md p-6">
-            <h3 class="text-lg font-bold mb-4 text-gray-900">Enviar Boleto / Fatura</h3>
+            <h3 class="text-lg font-bold mb-4 text-gray-900">Enviar Boleto / Nota</h3>
             <form id="form-boleto" class="space-y-4">
     <div>
         <label class="block text-sm font-medium text-gray-700">Unidade Pagadora</label>
@@ -6144,10 +6208,9 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
     <div class="fixed inset-0 bg-gray-900/75 backdrop-blur-sm transition-opacity"></div>
     <div class="fixed inset-0 z-10 overflow-y-auto">
         <div class="flex min-h-full items-center justify-center p-4">
-            <div class="bg-white rounded-lg shadow-xl w-full max-w-3xl p-6">
-                
+            <div class="bg-white rounded-lg shadow-xl w-full max-w-4xl p-6"> 
                 <div class="flex justify-between items-center mb-6 border-b pb-4">
-                    <h3 class="text-xl font-bold text-gray-900">Processar Contrato (Vincular RN)</h3>
+                    <h3 class="text-xl font-bold text-gray-900">Processar Contrato & Validar Nota</h3>
                     <button type="button" onclick="document.getElementById('modal-processar-contrato').classList.add('hidden')" class="text-gray-400 hover:text-gray-500">
                         <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
                     </button>
@@ -6155,28 +6218,31 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
 
                 <form id="form-processar-contrato" class="space-y-4">
                     
-                    <div class="bg-orange-50 p-4 rounded border border-orange-200 space-y-3">
-                        <div>
+                    <div class="bg-orange-50 p-4 rounded border border-orange-200 grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div class="col-span-1 md:col-span-2">
                             <label class="block text-xs font-bold text-orange-800 uppercase mb-1">1. Selecione o Boleto Pendente</label>
                             <select id="proc-select-boleto" class="block w-full rounded-md border-orange-300 shadow-sm sm:text-sm p-2 bg-white" required>
                                 <option value="">Carregando boletos...</option>
                             </select>
-                            <p class="text-xs text-orange-600 mt-1" id="proc-boleto-info">Selecione para ver o arquivo anexo.</p>
+                            <div class="flex justify-between items-center mt-1">
+                                <p class="text-xs text-orange-600" id="proc-boleto-info">Selecione para ver o arquivo anexo.</p>
+                            </div>
+
+                            <div class="grid grid-cols-3 gap-2 mt-2">
+                                <input id="proc-bol-unidade" readonly class="bg-white/50 border border-orange-200 text-xs w-full rounded text-orange-800 placeholder-orange-300 px-2 py-1" placeholder="Unidade">
+                                <input id="proc-bol-cr" readonly class="bg-white/50 border border-orange-200 text-xs w-full rounded text-orange-800 placeholder-orange-300 px-2 py-1" placeholder="CR">
+                                <input id="proc-bol-projeto" readonly class="bg-white/50 border border-orange-200 text-xs w-full rounded text-orange-800 placeholder-orange-300 px-2 py-1" placeholder="Projeto">
+                            </div>
                         </div>
                         
-                        <div class="grid grid-cols-3 gap-3 pt-2 border-t border-orange-200/50">
-                            <div>
-                                <label class="block text-[10px] text-orange-800 uppercase font-bold">Unidade Pagadora</label>
-                                <input id="proc-bol-unidade" readonly class="block w-full bg-white/50 border-orange-200 rounded text-xs text-gray-700 p-1">
-                            </div>
-                            <div>
-                                <label class="block text-[10px] text-orange-800 uppercase font-bold">Centro de Custo (CR)</label>
-                                <input id="proc-bol-cr" readonly class="block w-full bg-white/50 border-orange-200 rounded text-xs text-gray-700 p-1">
-                            </div>
-                            <div>
-                                <label class="block text-[10px] text-orange-800 uppercase font-bold">Projeto</label>
-                                <input id="proc-bol-projeto" readonly class="block w-full bg-white/50 border-orange-200 rounded text-xs text-gray-700 p-1">
-                            </div>
+                        <div>
+                             <label class="block text-xs font-bold text-gray-700 uppercase mb-1">Valor Total da Nota (R$)</label>
+                             <input type="number" step="0.01" id="proc-valor-total-nota" required class="block w-full rounded-md border-gray-300 shadow-sm p-2 font-bold text-gray-800" placeholder="0.00" oninput="window.checkTotalMatch()">
+                        </div>
+                        
+                        <div>
+                             <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Soma dos Itens Selecionados</label>
+                             <div id="proc-soma-itens" class="p-2 bg-white border border-gray-200 rounded text-sm font-bold text-gray-400">R$ 0.00</div>
                         </div>
                     </div>
 
@@ -6187,63 +6253,43 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
                         </select>
                     </div>
 
-                    <div class="bg-gray-50 p-3 rounded border border-gray-200 space-y-3">
-                        <h4 class="text-xs font-bold text-gray-500 uppercase border-b border-gray-300 pb-1">Dados do Contrato (Puxados do Cadastro)</h4>
-                        
-                        <div class="grid grid-cols-2 gap-3">
-                            <div>
-                                <label class="block text-[10px] text-gray-500 uppercase">CNPJ</label>
-                                <input id="proc-cnpj" readonly class="block w-full bg-gray-100 border-gray-300 rounded text-xs text-gray-700">
-                            </div>
-                            <div>
-                                <label class="block text-[10px] text-gray-500 uppercase">Contrato Base</label>
-                                <input id="proc-contrato-base" readonly class="block w-full bg-gray-100 border-gray-300 rounded text-xs text-gray-700">
-                            </div>
-                            <div>
-                                <label class="block text-[10px] text-gray-500 uppercase">Fluxo Nota</label>
-                                <input id="proc-fluxo" readonly class="block w-full bg-gray-100 border-gray-300 rounded text-xs text-gray-700">
-                            </div>
-                            <div>
-                                <label class="block text-[10px] text-gray-500 uppercase">Cond. Pagamento</label>
-                                <input id="proc-pagamento" readonly class="block w-full bg-gray-100 border-gray-300 rounded text-xs text-gray-700">
-                            </div>
-                            <div>
-                                <label class="block text-[10px] text-gray-500 uppercase">Unidade Origem (Contrato)</label>
-                                <input id="proc-origem" readonly class="block w-full bg-gray-100 border-gray-300 rounded text-xs text-gray-700">
-                            </div>
-                            <div>
-                                <label class="block text-[10px] text-gray-500 uppercase">RN Unidade</label>
-                                <input id="proc-rn-unidade" readonly class="block w-full bg-gray-100 border-gray-300 rounded text-xs text-gray-700">
-                            </div>
+                    <details class="bg-gray-50 p-2 rounded border border-gray-200">
+                        <summary class="text-xs font-bold text-gray-500 uppercase cursor-pointer">Ver Dados do Cadastro (CNPJ, Contrato, etc)</summary>
+                        <div class="grid grid-cols-3 gap-3 mt-3">
+                            <input id="proc-cnpj" readonly class="bg-gray-100 border-none text-xs w-full rounded" placeholder="CNPJ">
+                            <input id="proc-contrato-base" readonly class="bg-gray-100 border-none text-xs w-full rounded" placeholder="Contrato">
+                            <input id="proc-fluxo" readonly class="bg-gray-100 border-none text-xs w-full rounded" placeholder="Fluxo">
+                            <input id="proc-pagamento" readonly class="bg-gray-100 border-none text-xs w-full rounded" placeholder="Pagamento">
+                            <input id="proc-origem" readonly class="bg-gray-100 border-none text-xs w-full rounded" placeholder="Origem">
+                            <input id="proc-rn-unidade" readonly class="bg-gray-100 border-none text-xs w-full rounded" placeholder="RN Unidade">
+                            <input id="proc-descricao" readonly class="col-span-3 bg-gray-100 border-none text-xs w-full rounded" placeholder="Descrição">
+                            <input type="hidden" id="proc-justificativa">
+                            <input type="hidden" id="proc-obs-geral">
                         </div>
-
-                        <div>
-                            <label class="block text-[10px] text-gray-500 uppercase">Descrição do Contrato</label>
-                            <input id="proc-descricao" readonly class="block w-full bg-gray-100 border-gray-300 rounded text-xs text-gray-700">
-                        </div>
-
-                        <div>
-                            <label class="block text-[10px] text-gray-500 uppercase">Justificativa da Contratação</label>
-                            <textarea id="proc-justificativa" readonly rows="2" class="block w-full bg-gray-100 border-gray-300 rounded text-xs text-gray-700"></textarea>
-                        </div>
-                        
-                        <input type="hidden" id="proc-obs-geral">
-                    </div>
+                    </details>
 
                     <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-2">3. Selecione os Itens/Serviços deste Pagamento</label>
-                        <div id="proc-items-container" class="max-h-40 overflow-y-auto border border-gray-300 rounded-md p-2 bg-white">
-                            <p class="text-xs text-gray-400 italic p-2">Selecione um fornecedor para ver os itens.</p>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">3. Selecione os Itens, Defina Valores e RNs</label>
+                        <div class="border border-gray-300 rounded-md bg-white overflow-hidden">
+                            <table class="min-w-full divide-y divide-gray-200">
+                                <thead class="bg-gray-50">
+                                    <tr>
+                                        <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase w-8"></th>
+                                        <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Item / Serviço</th>
+                                        <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase w-32">Valor (R$)</th>
+                                        <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase w-32">Nº RN</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="proc-items-tbody" class="divide-y divide-gray-200">
+                                    <tr><td colspan="4" class="p-4 text-center text-xs text-gray-400">Selecione um fornecedor.</td></tr>
+                                </tbody>
+                            </table>
                         </div>
                     </div>
 
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-gray-200 mt-2">
                         <div>
-                            <label class="block text-sm font-medium text-gray-700">Número da RN (SAP/ERP)</label>
-                            <input name="numRN" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border focus:ring-blue-500 focus:border-blue-500" placeholder="Ex: 2025...">
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700">Data da RN</label>
+                            <label class="block text-sm font-medium text-gray-700">Data de Referência (Data RN)</label>
                             <input name="dataRN" type="date" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border">
                         </div>
                         <div class="col-span-1 md:col-span-2">
