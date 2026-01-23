@@ -803,6 +803,13 @@ window.renderPedidosTable = function(pedidos, tableId = 'tabela-pedidos-solicita
             if (!pFornecedor.includes(termo)) return false;
         }
 
+        // Dentro de renderPedidosTable, na parte de filtragem:
+if (state.filtros.rfa) {
+    const termoRfa = state.filtros.rfa.toLowerCase();
+    const pRfa = (p.rfa || '').toLowerCase();
+    if (!pRfa.includes(termoRfa)) return false;
+}
+
         if (searchFilter) {
             const rn = (p.numRN || '').toLowerCase();
             const oc = (p.numOC || '').toLowerCase();
@@ -1057,6 +1064,13 @@ window.renderServicosPage = function() {
     tbody.innerHTML = '';
 
     const perfil = currentUserProfile.perfil || "Solicitante";
+
+    // Dentro de renderServicosPage:
+// 1. Ler valor
+const fRfa = document.getElementById('filter-serv-rfa')?.value.toLowerCase() || '';
+
+// 2. Na filtragem:
+if (fRfa && !(p.rfa || '').toLowerCase().includes(fRfa)) return false;
 
     // --- 1. POPULAR FILTROS (Unidade e Status) ---
     const selUnidade = document.getElementById('filter-serv-unidade');
@@ -2074,12 +2088,10 @@ window.openServicoModal = (id = null) => {
 
     // --- LÓGICA DE VISIBILIDADE ---
     if (isSolicitante) {
-        // Solicitante: Esconde Fornecedor, Funcionário e Área de Aquisição
         if(divForn) divForn.classList.add('hidden');
         if(divFunc) divFunc.classList.add('hidden');
         if(areaAquisicao) areaAquisicao.classList.add('hidden');
     } else {
-        // Gestor: Mostra tudo
         if(divForn) divForn.classList.remove('hidden');
         if(divFunc) divFunc.classList.remove('hidden');
         if(areaAquisicao) areaAquisicao.classList.remove('hidden');
@@ -2089,7 +2101,7 @@ window.openServicoModal = (id = null) => {
     f.unidade.innerHTML = ''; 
     state.unidades.forEach(x => f.unidade.innerHTML += `<option value="${x}">${x}</option>`);
 
-    // 2. Preenche Status (USANDO A LISTA ESPECÍFICA DE SERVIÇOS)
+    // 2. Preenche Status
     f.status.innerHTML = '';
     SERVICE_STATUS_OPTIONS.forEach(key => {
          const config = STATUS_MAP[key];
@@ -2102,7 +2114,7 @@ window.openServicoModal = (id = null) => {
     dlForn.innerHTML = '';
     state.fornecedores.forEach(forn => dlForn.innerHTML += `<option value="${forn.nome}">`);
 
-    // 2. Popula Selects da Área de Aquisição (Novos)
+    // 3. Popula Selects da Área de Aquisição
     const selMod = document.getElementById('serv-modalidade');
     const selGrp = document.getElementById('serv-grupo');
     
@@ -2114,6 +2126,8 @@ window.openServicoModal = (id = null) => {
     state.gruposDeCompra.forEach(g => selGrp.innerHTML += `<option value="${g}">${g}</option>`);
     selGrp.value = 'Serviços'; // Default
 
+    // Limpa o campo RFA caso esteja sujo de uma edição anterior
+    document.getElementById('serv-rfa').value = '';
 
     if (id) {
         // --- EDIÇÃO ---
@@ -2129,16 +2143,16 @@ window.openServicoModal = (id = null) => {
             f.fornecedor.value = item.fornecedor || '';
             f.funcionario.value = item.funcionario || '';
 
-            // Dados de Aquisição (Preenchimento)
+            // Dados de Aquisição
             document.getElementById('serv-rn').value = item.numRN || '';
             document.getElementById('serv-data-rn').value = item.dataAberturaRN || '';
             document.getElementById('serv-oc').value = item.numOC || '';
-            document.getElementById('serv-valor').value = item.valorTotal || ''; // Valor Total do Serviço
-            
+            document.getElementById('serv-valor').value = item.valorTotal || '';
             document.getElementById('serv-solicitante').value = item.nomeDemandante || ''; 
-            
             document.getElementById('serv-cod').value = item.codigoProduto || '';
             document.getElementById('serv-variacao').value = item.variacao || '';
+            // CORREÇÃO: Preenche RFA aqui, onde 'item' existe
+            document.getElementById('serv-rfa').value = item.rfa || ''; 
             
             if(item.modalidade) selMod.value = item.modalidade;
             if(item.grupoDeCompra) selGrp.value = item.grupoDeCompra;
@@ -2164,6 +2178,7 @@ window.openServicoModal = (id = null) => {
         document.getElementById('serv-solicitante').value = currentUserProfile.nome;
     }
 
+    // Abre o modal
     document.getElementById('modal-servico').classList.remove('hidden');
 };
 
@@ -2224,6 +2239,137 @@ window.closeAttachmentsModal = () => {
 }
 
 
+// --- LÓGICA DO RELATÓRIO DE GASTOS (CR / PROJETO) ---
+
+window.openRelatorioGastos = () => {
+    // Popula selects de data
+    const selMes = document.getElementById('rel-gastos-mes');
+    const selAno = document.getElementById('rel-gastos-ano');
+    const hoje = new Date();
+    
+    selMes.innerHTML = '';
+    const meses = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
+    meses.forEach((m, i) => selMes.innerHTML += `<option value="${i}" ${i === hoje.getMonth() ? 'selected' : ''}>${m}</option>`);
+
+    selAno.innerHTML = '';
+    const anoAtual = hoje.getFullYear();
+    for(let i = anoAtual - 1; i <= anoAtual + 1; i++) {
+        selAno.innerHTML += `<option value="${i}" ${i === anoAtual ? 'selected' : ''}>${i}</option>`;
+    }
+
+    renderRelatorioGastosContent();
+    document.getElementById('modal-relatorio-gastos').classList.remove('hidden');
+};
+
+window.renderRelatorioGastosContent = () => {
+    const container = document.getElementById('relatorio-gastos-content');
+    const elTotal = document.getElementById('rel-gastos-total');
+    container.innerHTML = '';
+
+    const mes = parseInt(document.getElementById('rel-gastos-mes').value);
+    const ano = parseInt(document.getElementById('rel-gastos-ano').value);
+
+    // 1. Filtra Pedidos do Mês/Ano (Data de Solicitação ou Emissão? Geralmente competência é Emissão ou Solicitação. Vou usar Solicitação para garantir que todos entrem)
+    const itensDoMes = state.pedidos.filter(p => {
+        if (p.status === 'cancelado') return false;
+        let d = p.dataSolicitacao?.toDate ? p.dataSolicitacao.toDate() : new Date(p.dataSolicitacao);
+        if(!d || isNaN(d)) return false;
+        return d.getMonth() === mes && d.getFullYear() === ano;
+    });
+
+    if (itensDoMes.length === 0) {
+        container.innerHTML = '<div class="text-center py-10 text-gray-400">Nenhum gasto registrado neste período.</div>';
+        elTotal.textContent = 'R$ 0,00';
+        return;
+    }
+
+    // 2. Agrupa por CR > Projeto
+    const tree = {};
+    let totalGeral = 0;
+
+    itensDoMes.forEach(p => {
+        const cr = p.cr || 'SEM CR';
+        const proj = p.projeto || 'SEM PROJETO';
+        const val = parseFloat(p.valorTotal || 0);
+
+        if (!tree[cr]) tree[cr] = { total: 0, projetos: {} };
+        tree[cr].total += val;
+
+        if (!tree[cr].projetos[proj]) tree[cr].projetos[proj] = { total: 0, itens: [] };
+        tree[cr].projetos[proj].total += val;
+        tree[cr].projetos[proj].itens.push(p);
+
+        totalGeral += val;
+    });
+
+    // 3. Renderiza HTML (Acordeões)
+    Object.keys(tree).sort().forEach(cr => {
+        const dadosCR = tree[cr];
+        const pctCR = ((dadosCR.total / totalGeral) * 100).toFixed(1);
+
+        const crHtml = document.createElement('details');
+        crHtml.className = "group mb-4 border border-gray-200 rounded-lg bg-white overflow-hidden";
+        crHtml.open = true; // Abre por padrão os CRs? Pode ser muita coisa. Vamos deixar fechado ou aberto o primeiro.
+
+        crHtml.innerHTML = `
+            <summary class="flex justify-between items-center p-4 cursor-pointer bg-gray-50 hover:bg-gray-100 transition-colors list-none">
+                <div class="flex items-center gap-2">
+                    <span class="font-bold text-gray-700 text-lg">${cr}</span>
+                    <span class="text-xs bg-gray-200 text-gray-600 px-2 py-1 rounded-full">${pctCR}% do Total</span>
+                </div>
+                <div class="text-right">
+                    <div class="font-bold text-gray-900 text-lg">R$ ${dadosCR.total.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</div>
+                    <div class="text-xs text-blue-600 font-semibold group-open:hidden">Clique para ver projetos</div>
+                </div>
+            </summary>
+            <div class="p-4 bg-white border-t border-gray-100 space-y-3">
+                </div>
+        `;
+
+        const projetosContainer = crHtml.querySelector('div.space-y-3');
+
+        Object.keys(dadosCR.projetos).sort().forEach(proj => {
+            const dadosProj = dadosCR.projetos[proj];
+            
+            const projDetails = document.createElement('details');
+            projDetails.className = "group/proj border-l-4 border-purple-200 pl-4 py-2";
+            
+            // Lista de itens
+            const itensList = dadosProj.itens.map(i => `
+                <li class="flex justify-between text-xs py-1 border-b border-gray-50 last:border-0 hover:bg-gray-50 p-1 rounded">
+                    <div class="flex-1">
+                        <span class="font-bold text-gray-700">${i.nomeProduto}</span>
+                        <span class="text-gray-400 mx-1">-</span>
+                        <span class="text-gray-500">${i.fornecedor || 'S/ Fornecedor'}</span>
+                        ${i.rfa ? `<span class="ml-2 bg-purple-100 text-purple-700 px-1 rounded font-bold">RFA: ${i.rfa}</span>` : ''}
+                    </div>
+                    <div class="font-mono font-medium">R$ ${parseFloat(i.valorTotal).toFixed(2)}</div>
+                </li>
+            `).join('');
+
+            projDetails.innerHTML = `
+                <summary class="flex justify-between items-center cursor-pointer list-none mb-1">
+                    <span class="font-semibold text-gray-800">${proj}</span>
+                    <div class="flex items-center gap-3">
+                        <span class="text-sm font-bold text-purple-700">R$ ${dadosProj.total.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</span>
+                        <svg class="w-4 h-4 text-gray-400 transform group-open/proj:rotate-180 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" /></svg>
+                    </div>
+                </summary>
+                <ul class="mt-2 space-y-1">
+                    ${itensList}
+                </ul>
+            `;
+
+            projetosContainer.appendChild(projDetails);
+        });
+
+        container.appendChild(crHtml);
+    });
+
+    elTotal.textContent = totalGeral.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+};
+
+
         // --- GESTÃO DE NF ---
 window.renderGestaoNFPage = function() {
     const tbody = document.getElementById('tabela-nf-body');
@@ -2234,75 +2380,91 @@ window.renderGestaoNFPage = function() {
     const isGestor = perfil === 'Aquisicoes' || perfil === 'Admin';
     const isRecebedor = perfil === 'Recebedor';
     
-    // Elementos de UI para controlar visibilidade
+    // Pega o valor do filtro. Se não achar o elemento, assume 'pendente'
     const filterEl = document.getElementById('filter-nf-status');
-    const btnRelatorio = document.getElementById('btn-relatorio-mensal');
+    const filterType = filterEl ? filterEl.value : 'pendente';
 
-    // --- LÓGICA DE PERMISSÃO E FILTRO ---
-    let filterType = 'pendente'; // Valor padrão
+    // 1. STATUS QUE DEVEM APARECER NA GESTÃO DE NF
+    // Adicionei 'em-cotacao' e 'enviado-aquisicao' se tiverem RN, por segurança
+    const STATUSES_TO_TRACK = [
+        'registrado', 
+        'aguardando-entrega', 
+        'entregue', 
+        'aguardando-lancamento', 
+        'finalizado', 
+        'em-atraso'
+    ];
 
-    if (isRecebedor) {
-        // 1. Recebedor: Força o filtro para apenas 'aguardando-entrega'
-        filterType = 'aguardando-entrega';
-
-        // 2. Esconde filtros e botão de relatório
-        if (filterEl) filterEl.classList.add('hidden');
-        if (btnRelatorio) btnRelatorio.classList.add('hidden');
-    } else {
-        // Outros perfis: Usa o valor selecionado no select
-        filterType = filterEl ? filterEl.value : 'pendente';
-
-        // Garante que estão visíveis
-        if (filterEl) filterEl.classList.remove('hidden');
-        if (btnRelatorio) btnRelatorio.classList.remove('hidden');
-    }
-
-    const STATUSES_TO_TRACK = ['registrado', 'aguardando-entrega', 'entregue', 'aguardando-lancamento', 'finalizado', 'em-atraso'];
-
+    // Filtra pedidos ativos. 
+    // IMPORTANTE: Se o usuário selecionou "Ver Todos", mostramos até o que não está na lista padrão se tiver NF.
     const pedidosAtivos = state.pedidos.filter(p => {
+        // Se já tem NF, sempre aparece (independente do status)
         if (p.urlNotaFiscal) return true;
+        // Se não tem NF, precisa estar nos status monitorados
         return STATUSES_TO_TRACK.includes(p.status);
     });
 
+    // --- FUNÇÃO AUXILIAR DE COMPLIANCE ---
     const getCompliance = (item) => {
         if (!item.urlNotaFiscal) return 'sem-nf';
         if (!item.dataDoDia || !item.dataEmissao) return 'ok';
+
         const dEnvio = new Date(item.dataDoDia + 'T00:00:00');
         const dEmissao = new Date(item.dataEmissao + 'T00:00:00');
+
+        // 1. Regra de Competência
         const envioMesAno = dEnvio.getFullYear() * 12 + dEnvio.getMonth();
         const emissaoMesAno = dEmissao.getFullYear() * 12 + dEmissao.getMonth();
         if (envioMesAno > emissaoMesAno) return 'fora-competencia';
+
+        // 2. Regra: Fora da NP (Dia 28 a 31)
         const diaEnvio = dEnvio.getDate();
         if (diaEnvio >= 28) return 'fora-np';
+
         return 'ok';
     };
 
+    // --- 2. APLICAR FILTROS ---
     let pedidosFiltrados = [];
-    
-    // Aplicação dos Filtros baseada no filterType definido acima
-    if (filterType === 'pendente') pedidosFiltrados = pedidosAtivos.filter(p => p.status !== 'finalizado' && !p.urlNotaFiscal);
-    else if (filterType === 'aguardando-entrega') pedidosFiltrados = pedidosAtivos.filter(p => p.status === 'aguardando-entrega' || p.status === 'em-atraso');
-    else if (filterType === 'entregue') pedidosFiltrados = pedidosAtivos.filter(p => !!p.urlNotaFiscal || ['aguardando-lancamento', 'finalizado', 'entregue'].includes(p.status));
-    else if (filterType === 'fora-np') pedidosFiltrados = pedidosAtivos.filter(p => getCompliance(p) === 'fora-np');
-    else if (filterType === 'fora-competencia') pedidosFiltrados = pedidosAtivos.filter(p => getCompliance(p) === 'fora-competencia');
-    else if (filterType === 'com-obs') pedidosFiltrados = pedidosAtivos.filter(p => p.obsNF && p.obsNF.trim() !== '');
-    else pedidosFiltrados = pedidosAtivos;
+
+    if (filterType === 'pendente') {
+        // Mostra itens que NÃO estão finalizados e NÃO têm NF
+        pedidosFiltrados = pedidosAtivos.filter(p => p.status !== 'finalizado' && !p.urlNotaFiscal);
+    } 
+    else if (filterType === 'aguardando-entrega') {
+        // Mostra explicitamente itens Aguardando Entrega ou Em Atraso
+        pedidosFiltrados = pedidosAtivos.filter(p => p.status === 'aguardando-entrega' || p.status === 'em-atraso');
+    }
+    else if (filterType === 'entregue') {
+        // Mostra itens com NF OU que já passaram da entrega
+        pedidosFiltrados = pedidosAtivos.filter(p => !!p.urlNotaFiscal || ['aguardando-lancamento', 'finalizado', 'entregue'].includes(p.status));
+    }
+    else if (filterType === 'fora-np') {
+        pedidosFiltrados = pedidosAtivos.filter(p => getCompliance(p) === 'fora-np');
+    }
+    else if (filterType === 'fora-competencia') {
+        pedidosFiltrados = pedidosAtivos.filter(p => getCompliance(p) === 'fora-competencia');
+    }
+    else if (filterType === 'com-obs') {
+        pedidosFiltrados = pedidosAtivos.filter(p => p.obsNF && p.obsNF.trim() !== '');
+    }
+    else {
+        // Todos
+        pedidosFiltrados = pedidosAtivos;
+    }
 
     if (pedidosFiltrados.length === 0) {
-        // Mensagem específica se for recebedor e não tiver nada
-        const msg = isRecebedor 
-            ? "Nenhuma entrega pendente no momento." 
-            : `Nenhum pedido encontrado para o filtro: <strong>${filterType}</strong>.`;
-            
-        tbody.innerHTML = `<tr><td colspan="7" class="py-10 text-center text-gray-500">${msg}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="7" class="py-10 text-center text-gray-500">Nenhum pedido encontrado para o filtro: <strong>${filterType}</strong>.</td></tr>`;
         return;
     }
 
+    // --- 3. AGRUPAMENTO (RN) ---
     const grouped = [];
     const rnMap = new Map();
 
     pedidosFiltrados.forEach(p => {
         const compliance = getCompliance(p);
+        
         if (p.numRN) {
             if (!rnMap.has(p.numRN)) {
                 rnMap.set(p.numRN, { 
@@ -2315,8 +2477,6 @@ window.renderGestaoNFPage = function() {
                     fornecedor: p.fornecedor,
                     hasNF: !!p.urlNotaFiscal,
                     nfUrl: p.urlNotaFiscal,
-                    nfUploadedBy: p.nfUploadedBy,
-                    nfUploadedAt: p.nfUploadedAt,
                     fin: p.fin,
                     dataVcto: p.dataVcto,
                     obsNF: p.obsNF, 
@@ -2329,13 +2489,10 @@ window.renderGestaoNFPage = function() {
                 g.total += parseFloat(p.valorTotal||0);
                 if(!!p.urlNotaFiscal) g.hasNF = true;
                 if(p.obsNF) g.obsNF = p.obsNF;
+                // Prioridade de erro no grupo
                 if(compliance !== 'ok' && compliance !== 'sem-nf') g.compliance = compliance;
                 
-                if(!g.nfUploadedBy && p.nfUploadedBy) {
-                    g.nfUploadedBy = p.nfUploadedBy;
-                    g.nfUploadedAt = p.nfUploadedAt;
-                }
-                
+                // Se o status do item atual for "aguardando-entrega", atualiza o grupo para refletir isso visualmente
                 if (p.status === 'aguardando-entrega' || p.status === 'em-atraso') {
                     g.status = p.status;
                 }
@@ -2351,58 +2508,53 @@ window.renderGestaoNFPage = function() {
         }
     });
 
+    // --- 4. RENDERIZAÇÃO ---
     grouped.forEach(item => {
         const tr = document.createElement('tr');
-        let rowClass = item.obsNF ? "bg-yellow-50 hover:bg-yellow-100 border-b border-yellow-200" : "hover:bg-gray-50 border-b border-gray-100";
+        
+        // Cor de Fundo (Retorno FIN)
+        let rowClass = item.obsNF 
+            ? "bg-yellow-50 hover:bg-yellow-100 border-b border-yellow-200" 
+            : "hover:bg-gray-50 border-b border-gray-100";
         tr.className = rowClass;
 
+        // Tags
         let complianceTag = '';
-        if (item.compliance === 'fora-np') complianceTag = `<span class="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-800 border border-orange-200">Fora NP</span>`;
-        else if (item.compliance === 'fora-competencia') complianceTag = `<span class="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800 border border-red-200">Fora Comp.</span>`;
+        if (item.compliance === 'fora-np') {
+            complianceTag = `<span class="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-800 border border-orange-200" title="Enviado entre dia 28-31">Fora NP</span>`;
+        } else if (item.compliance === 'fora-competencia') {
+            complianceTag = `<span class="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800 border border-red-200" title="Enviado no mês seguinte">Fora Comp.</span>`;
+        }
 
         const targetId = item.isGroup ? item.numRN : item.id;
         const nfIcon = item.hasNF ? `<span class="ml-2 text-green-600"><svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg></span>` : '';
 
-        const obsDisplay = item.obsNF ? `<div class="mt-1 text-[10px] text-red-700 font-bold bg-white border border-red-200 p-1 rounded inline-flex items-center gap-1 max-w-[200px]" title="${item.obsNF}"><span>↩️ FIN:</span> <span class="truncate">${item.obsNF}</span></div>` : '';
+        // Display Observação
+        const obsDisplay = item.obsNF 
+            ? `<div class="mt-1 text-[10px] text-red-700 font-bold bg-white border border-red-200 p-1 rounded inline-flex items-center gap-1 max-w-[200px]" title="${item.obsNF}">
+                 <span>↩️ FIN:</span> <span class="truncate">${item.obsNF}</span>
+               </div>` 
+            : '';
 
         let actionBtn = '';
         let vctoDisplay = '';
         
-        let uploadInfo = '';
-        if (item.nfUploadedBy) {
-            let dateStr = '';
-            if (item.nfUploadedAt) {
-                const d = item.nfUploadedAt.toDate ? item.nfUploadedAt.toDate() : new Date(item.nfUploadedAt);
-                dateStr = d.toLocaleDateString('pt-BR', {day:'2-digit', month:'2-digit'}) + ' ' + d.toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'});
-            }
-            uploadInfo = `<div class="mt-1 text-[10px] text-gray-400 leading-tight">Anexado por <strong>${item.nfUploadedBy.split(' ')[0]}</strong><br>${dateStr}</div>`;
-        }
-
         if (isGestor || isRecebedor) {
             if (item.hasNF) {
                 const fin = item.fin || '---';
                 const vcto = item.dataVcto ? item.dataVcto.split('-').reverse().join('/') : '---';
-                
-                // Se for recebedor e já tem NF, mostra apenas info básica, sem botão de editar se já foi entregue
                 vctoDisplay = isGestor 
                     ? `<div class="text-sm font-medium text-gray-900">${fin}</div><div class="text-xs text-gray-500">Vcto: ${vcto}</div>${obsDisplay}` 
-                    : '<div class="text-xs text-green-600 font-bold">Entregue</div>';
+                    : '<div class="text-xs text-gray-400">NF Recebida</div>';
                 
-                if (isGestor) {
-                    actionBtn = `
-                        <div class="flex justify-end gap-2">
-                            <a href="${item.nfUrl}" target="_blank" class="bg-white border border-gray-300 text-gray-700 px-2 py-1 rounded text-xs hover:bg-gray-50 flex items-center gap-1">Ver NF</a>
-                            <button onclick="openNFModal('${targetId}', ${item.isGroup})" class="text-primary-600 hover:text-primary-800"><svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg></button>
-                        </div>`;
-                } else {
-                    // Recebedor só vê o link se já enviou
-                    actionBtn = `<a href="${item.nfUrl}" target="_blank" class="text-blue-600 hover:underline text-xs">Ver NF Enviada</a>`;
-                }
-
+                actionBtn = `
+                    <div class="flex justify-end gap-2">
+                        <a href="${item.nfUrl}" target="_blank" class="bg-white border border-gray-300 text-gray-700 px-2 py-1 rounded text-xs hover:bg-gray-50 flex items-center gap-1">Ver NF</a>
+                        <button onclick="openNFModal('${targetId}', ${item.isGroup})" class="text-primary-600 hover:text-primary-800"><svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg></button>
+                    </div>`;
             } else {
                 vctoDisplay = isGestor ? `<div class="text-xs text-gray-400">Aguardando NF</div>${obsDisplay}` : '';
-                // Botão verde para Recebedor anexar
-                actionBtn = `<button onclick="openNFModal('${targetId}', ${item.isGroup})" class="bg-green-600 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-green-700 shadow-sm flex items-center gap-1 ml-auto">Receber & Anexar NF</button>`;
+                actionBtn = `<button onclick="openNFModal('${targetId}', ${item.isGroup})" class="bg-green-600 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-green-700 shadow-sm flex items-center gap-1 ml-auto">Anexar NF</button>`;
             }
         } else {
             actionBtn = '---'; vctoDisplay = '---';
@@ -2413,9 +2565,12 @@ window.renderGestaoNFPage = function() {
             const ocDisplay = item.numOC ? `OC ${item.numOC}` : `RN ${item.numRN}`;
             const finVctoCell = isGestor ? `<td class="px-4 py-4 text-left">${vctoDisplay}</td>` : '';
             
+            // Botão de Grupo
             let groupActionHtml = actionBtn;
-            
-            // Layout Agrupado
+            if(item.isGroup && isGestor && item.hasNF) {
+                groupActionHtml = `<div class="flex justify-end gap-2"><a href="${item.nfUrl}" target="_blank" class="text-gray-700 px-2 border rounded text-xs bg-white">Ver NF</a><button onclick="openNFModal('${item.numRN}', true)" class="text-primary-600"><svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg></button></div>`;
+            }
+
             tr.innerHTML = `
                 <td class="px-4 py-4 font-bold text-primary-700 flex items-center gap-2">
                     <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" /></svg>
@@ -2424,10 +2579,7 @@ window.renderGestaoNFPage = function() {
                 <td class="px-4 py-4 text-sm text-gray-600">Agrupamento (${item.items.length} itens)</td>
                 <td class="px-4 py-4 text-sm text-gray-900">${item.fornecedor || '-'}</td>
                 <td class="px-4 py-4 text-sm font-bold text-gray-900">R$ ${item.total.toFixed(2)}</td>
-                <td class="px-4 py-4">
-                    <span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${st.class}">${st.text}</span>
-                    ${uploadInfo} 
-                </td>
+                <td class="px-4 py-4"><span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${st.class}">${st.text}</span></td>
                 ${finVctoCell} 
                 <td class="px-4 py-4 text-right flex items-center justify-end gap-2">
                     ${groupActionHtml}
@@ -2435,7 +2587,6 @@ window.renderGestaoNFPage = function() {
                 </td>
             `;
         } else {
-            // Layout Individual
             const st = STATUS_MAP[item.status] || { text: item.status, class: "bg-gray-100" };
             const finVctoCell = isGestor ? `<td class="px-4 py-4 text-left">${vctoDisplay}</td>` : '';
 
@@ -2447,10 +2598,7 @@ window.renderGestaoNFPage = function() {
                 </td>
                 <td class="px-4 py-4 text-sm text-gray-900">${item.fornecedor || '-'}</td>
                 <td class="px-4 py-4 text-sm font-bold text-gray-900">R$ ${parseFloat(item.valorTotal).toFixed(2)}</td>
-                <td class="px-4 py-4">
-                    <span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${st.class}">${st.text}</span>
-                    ${uploadInfo} 
-                </td>
+                <td class="px-4 py-4"><span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${st.class}">${st.text}</span></td>
                 ${finVctoCell}
                 <td class="px-4 py-4 text-right">
                     ${actionBtn}
@@ -3586,7 +3734,7 @@ async function fetchFuncionarios() {
 
         window.closeConfirmationModal = () => document.getElementById('modal-confirm').classList.add('hidden');
         
-        window.openPedidoModal = (id = null, fromGroupModal = false) => {
+       window.openPedidoModal = (id = null, fromGroupModal = false) => {
     const f = document.getElementById('form-pedido');
     f.reset();
     f.dataset.id = id || "";
@@ -3633,7 +3781,7 @@ async function fetchFuncionarios() {
     g.innerHTML = '<option value="">-</option>';
     state.gruposDeCompra.forEach(x => g.innerHTML += `<option value="${x}">${x}</option>`);
     
-    // --- STATUS DO MODAL (USANDO A NOVA LISTA DE PRODUTOS) ---
+    // Status
     const s = f.status;
     s.innerHTML = '';
     PRODUCT_STATUS_OPTIONS.forEach(key => {
@@ -3642,7 +3790,6 @@ async function fetchFuncionarios() {
             s.innerHTML += `<option value="${key}">${config.text}</option>`;
         }
     });
-    // --------------------------------------------------------
 
     // Filtro de unidade padrão
     const filterU = document.getElementById('filter-unidade')?.value;
@@ -3657,7 +3804,6 @@ async function fetchFuncionarios() {
     const adminArea = document.getElementById('modal-admin-area');
     const rnInput = f.numRN;
 
-    // Se for Admin ou Aquisições, mostra a área e LIBERA o campo RN
     if (currentUserProfile.perfil !== 'Solicitante') {
         adminArea.classList.remove('hidden');
         rnInput.disabled = false; 
@@ -3695,6 +3841,9 @@ async function fetchFuncionarios() {
             if (p.dataPrevisao) f.dataPrevisao.value = p.dataPrevisao;
             if (p.fornecedor) f.fornecedor.value = p.fornecedor;
             if (p.segmento) f.segmento.value = p.segmento;
+            
+            // CORREÇÃO: Preenche RFA se existir o campo
+            if (p.rfa && f.rfa) f.rfa.value = p.rfa;
 
             if (currentUserProfile.perfil === 'Solicitante' && p.status !== 'enviado-aquisicao') {
                 f.querySelectorAll('input, select, textarea').forEach(el => el.disabled = true);
@@ -3783,6 +3932,7 @@ async function fetchContratosRegistros() {
 
 // 3. Renderizar Tabela
 // Substitua a função antiga por esta:
+// Renderizar Tabela de Contratos com Controle de Saldo
 window.renderContratosRegistrosTable = () => {
     const tbody = document.getElementById('lista-fornecedores-contrato-body');
     const searchInput = document.getElementById('search-contrato-fornecedor');
@@ -3790,54 +3940,105 @@ window.renderContratosRegistrosTable = () => {
     if (!tbody) return;
     tbody.innerHTML = '';
 
-    // 1. Pega o termo de busca (se o input existir)
     const term = searchInput ? searchInput.value.toLowerCase().trim() : '';
+    const currentYear = new Date().getFullYear();
 
-    // 2. Filtra a lista
     const filteredList = state.contratosRegistros.filter(item => {
-        if (!term) return true; // Se não digitou nada, mostra tudo
-
+        if (!term) return true;
         const fornecedor = (item.fornecedor || '').toLowerCase();
         const contrato = (item.contrato || '').toLowerCase();
         const cnpj = (item.cnpj || '').toLowerCase();
-
-        // Busca por Nome do Fornecedor OU Nome do Contrato OU CNPJ
         return fornecedor.includes(term) || contrato.includes(term) || cnpj.includes(term);
     });
 
-    // 3. Verifica se está vazio
     if (filteredList.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="5" class="py-8 text-center text-gray-500 text-sm">Nenhum registro encontrado para "<strong>${term}</strong>".</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="5" class="py-8 text-center text-gray-500 text-sm">Nenhum registro encontrado.</td></tr>`;
         return;
     }
 
-    // 4. Renderiza
     filteredList.forEach(item => {
         const unidadesUso = Array.isArray(item.unidadesUso) ? item.unidadesUso.join(', ') : 'Todas';
+        const saldoAnual = parseFloat(item.saldoAnual) || 0;
+        
+        // --- CÁLCULO DO GASTO (HISTÓRICO) ---
+        let totalGasto = 0;
+        state.pedidos.forEach(p => {
+            // Verifica se o pedido é deste fornecedor e não está cancelado
+            // Também verifica se a data do pedido é do ano atual
+            if (p.fornecedor === item.fornecedor && p.status !== 'cancelado') {
+                let pDate = p.dataSolicitacao?.toDate ? p.dataSolicitacao.toDate() : new Date(p.dataSolicitacao);
+                if (pDate.getFullYear() === currentYear) {
+                    totalGasto += parseFloat(p.valorTotal || 0);
+                }
+            }
+        });
+
+        const saldoRestante = saldoAnual - totalGasto;
+        const percentualGasto = saldoAnual > 0 ? (totalGasto / saldoAnual) * 100 : 0;
+        
+        // Definição de cores da barra
+        let barColor = "bg-green-500";
+        let statusText = "Saldo OK";
+        let statusTextColor = "text-green-700";
+
+        if (saldoAnual > 0) {
+            if (percentualGasto >= 100) {
+                barColor = "bg-red-600";
+                statusText = "Esgotado";
+                statusTextColor = "text-red-700";
+            } else if (percentualGasto >= 85) {
+                barColor = "bg-orange-500";
+                statusText = "Atenção";
+                statusTextColor = "text-orange-700";
+            }
+        } else {
+            barColor = "bg-gray-300"; // Sem limite definido
+        }
+
+        // Formatação de Moeda
+        const fmtMoney = (v) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
+        // HTML da Barra
+        const budgetHtml = saldoAnual > 0 
+            ? `
+                <div class="mt-2 w-full">
+                    <div class="flex justify-between text-[10px] uppercase font-bold mb-1">
+                        <span class="text-gray-500">Utilizado: ${fmtMoney(totalGasto)}</span>
+                        <span class="${statusTextColor}">${statusText} (${percentualGasto.toFixed(1)}%)</span>
+                    </div>
+                    <div class="w-full bg-gray-200 rounded-full h-2 overflow-hidden border border-gray-300">
+                        <div class="${barColor} h-2" style="width: ${Math.min(percentualGasto, 100)}%"></div>
+                    </div>
+                    <div class="flex justify-between text-[10px] mt-1 font-medium">
+                        <span class="text-gray-400">Limite: ${fmtMoney(saldoAnual)}</span>
+                        <span class="text-blue-700">Disp: ${fmtMoney(saldoRestante)}</span>
+                    </div>
+                </div>
+              ` 
+            : `<div class="mt-2 text-xs text-gray-400 italic">Sem limite anual definido. <br> Gasto Atual: ${fmtMoney(totalGasto)}</div>`;
 
         tbody.innerHTML += `
             <tr class="hover:bg-gray-50 border-b border-gray-100 transition-colors">
-                <td class="px-4 py-3 text-sm">
-                    <div class="font-bold text-gray-900">${item.fornecedor}</div>
+                <td class="px-4 py-3 text-sm align-top">
+                    <div class="font-bold text-gray-900 text-base">${item.fornecedor}</div>
                     <div class="text-xs text-gray-500">${item.cnpj}</div>
+                    <div class="mt-1 text-xs text-blue-600 font-semibold bg-blue-50 inline-block px-1 rounded border border-blue-100">${item.contrato}</div>
                 </td>
-                <td class="px-4 py-3 text-sm text-gray-700 font-medium">
-                    ${item.contrato}
+                <td class="px-4 py-3 text-sm text-gray-600 align-top">
+                   <div>Origem: <strong>${item.unidadeContrato}</strong></div>
+                   <div class="text-xs text-gray-400 mt-1 max-w-[150px] truncate" title="${unidadesUso}">Uso: ${unidadesUso}</div>
                 </td>
-                <td class="px-4 py-3 text-sm text-gray-600">
-                    <span class="bg-blue-50 text-blue-700 px-2 py-0.5 rounded text-xs border border-blue-100">
-                        ${item.unidadeContrato}
-                    </span>
+                
+                <td class="px-4 py-3 text-sm align-top" style="min-width: 200px;">
+                    ${budgetHtml}
                 </td>
-                <td class="px-4 py-3 text-sm text-gray-500 text-xs">
-                    <div class="truncate max-w-xs" title="${unidadesUso}">${unidadesUso}</div>
-                </td>
-                <td class="px-4 py-3 text-right flex justify-end gap-2">
+
+                <td class="px-4 py-3 text-right align-top flex justify-end gap-2">
                     <button onclick="editContratoRegistro('${item.id}')" class="text-primary-600 hover:text-primary-800 p-1 hover:bg-blue-50 rounded" title="Editar">
-                        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+                        <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
                     </button>
                     <button onclick="deleteContratoRegistro('${item.id}')" class="text-red-500 hover:text-red-700 p-1 hover:bg-red-50 rounded" title="Excluir">
-                        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                        <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
                     </button>
                 </td>
             </tr>
@@ -3867,11 +4068,12 @@ window.showFormFornecedorContrato = (id = null) => {
     form.reset();
     form.dataset.id = id || "";
     
-    // 1. Limpa a lista global antes de carregar
     tempContractItems = []; 
     window.renderContractItemsList();
 
-    // Popular Selects (Origem e RN)
+    // ... (Código de popular Selects de Unidade e RN permanece igual) ...
+    // REPETIR O BLOCO DE POPULAR SELECTS DA SUA FUNÇÃO ORIGINAL AQUI
+    // ...
     const selOrigem = document.getElementById('select-unidade-contrato');
     const selRN = document.getElementById('select-rn-unidade');
     const divCheckboxes = document.getElementById('checkboxes-unidades-uso');
@@ -3882,7 +4084,6 @@ window.showFormFornecedorContrato = (id = null) => {
         selOrigem.innerHTML += `<option value="${u}">${u}</option>`;
         selRN.innerHTML += `<option value="${u}">${u}</option>`;
     });
-    // Checkboxes
     state.unidades.forEach(u => {
         divCheckboxes.innerHTML += `
             <label class="inline-flex items-center space-x-2 bg-white p-1 rounded border border-gray-100">
@@ -3902,22 +4103,22 @@ window.showFormFornecedorContrato = (id = null) => {
             form.unidadeContrato.value = item.unidadeContrato || '';
             form.rnUnidade.value = item.rnUnidade || '';
             
+            // --- NOVO: Carregar Saldo ---
+            form.saldoAnual.value = item.saldoAnual || '';
+            // ----------------------------
+
             form.fluxoNota.value = item.fluxoNota || 'Mensal';
             form.pagamento.value = item.pagamento || '';
             form.descricao.value = item.descricao || '';
             form.justificativa.value = item.justificativa || '';
             form.observacao.value = item.observacao || '';
 
-            // --- LÓGICA DE CARREGAMENTO DOS ITENS ---
             if (item.itensContrato && Array.isArray(item.itensContrato)) {
-                // Carrega o array salvo
                 tempContractItems = item.itensContrato;
             } else if (item.itensContrato && typeof item.itensContrato === 'string') {
-                // Suporte legado para string
                 tempContractItems = [{ descricao: item.itensContrato }];
             }
-            window.renderContractItemsList(); // Atualiza a tabela visual
-            // ----------------------------------------
+            window.renderContractItemsList(); 
 
             if (Array.isArray(item.unidadesUso)) {
                 const boxes = document.getElementsByName('unidadesUsoCheck');
@@ -3946,7 +4147,6 @@ document.getElementById('form-fornecedor-contrato').addEventListener('submit', a
     const btn = f.querySelector('button[type="submit"]');
     const docId = f.dataset.id;
 
-    // Coleta as unidades selecionadas nos checkboxes
     const unidadesSelecionadas = [];
     document.getElementsByName('unidadesUsoCheck').forEach(box => {
         if(box.checked) unidadesSelecionadas.push(box.value);
@@ -3964,17 +4164,18 @@ document.getElementById('form-fornecedor-contrato').addEventListener('submit', a
         cnpj: f.cnpj.value,
         contrato: f.contrato.value,
         unidadeContrato: f.unidadeContrato.value, 
-        rnUnidade: f.rnUnidade.value,             
+        rnUnidade: f.rnUnidade.value,   
         
+        // --- NOVO: Salvar Saldo Anual ---
+        saldoAnual: parseFloat(f.saldoAnual.value) || 0,
+        // --------------------------------
+
         fluxoNota: f.fluxoNota.value,
         pagamento: f.pagamento.value,
         descricao: f.descricao.value,
         justificativa: f.justificativa.value,
         observacao: f.observacao.value,
-
-        // AQUI ESTÁ A CORREÇÃO: Salvando o array global no banco
         itensContrato: tempContractItems, 
-        
         unidadesUso: unidadesSelecionadas,        
         updatedAt: Timestamp.now()
     };
@@ -3986,7 +4187,7 @@ document.getElementById('form-fornecedor-contrato').addEventListener('submit', a
         } else {
             data.createdAt = Timestamp.now();
             await addDoc(collection(db, `artifacts/${appId}/public/data/contratos_registros`), data);
-            showNotification("Novo fornecedor de contrato cadastrado!", "success");
+            showNotification("Novo contrato cadastrado!", "success");
         }
         window.hideFormFornecedorContrato();
     } catch (err) {
@@ -4332,6 +4533,14 @@ window.openDetalhesContrato = (id) => {
                 });
              }
 
+const filterRFA = document.getElementById('filter-rfa');
+if (filterRFA) {
+    filterRFA.addEventListener('input', e => {
+        state.filtros.rfa = e.target.value;
+        renderPedidosTable(state.pedidos);
+    });
+}
+
              // --- CÓDIGO NOVO PARA O FORNECEDOR ---
 const filterFornSpecific = document.getElementById('filter-fornecedor-specific');
 if (filterFornSpecific) {
@@ -4375,39 +4584,34 @@ document.getElementById('btn-novo-fornecedor')?.addEventListener('click', () => 
 
              // Save Pedido
              document.getElementById('form-pedido').addEventListener('submit', async e => {
-                 e.preventDefault();
-                 const btn = document.getElementById('btn-save-pedido');
-                 const f = e.target;
-                 
-                 // --- VALIDATION FOR SOLICITANTE ---
-                 if (currentUserProfile.perfil === 'Solicitante') {
-                     if (!f.cr.value.trim() || !f.projeto.value.trim()) {
-                         showNotification("CR e Projeto são obrigatórios.", "error");
-                         return;
-                     }
-                     if (!f.quantidade.value || !f.valorUnitario.value) {
-                         showNotification("Quantidade e Valor são obrigatórios.", "error");
-                         return;
-                     }
-                     if (!f.nomeDemandante.value.trim()) {
-                         showNotification("Demandante é obrigatório.", "error");
-                         return;
-                     }
-                 }
+    e.preventDefault();
+    const btn = document.getElementById('btn-save-pedido');
+    const f = e.target;
+    
+    // --- VALIDATION FOR SOLICITANTE ---
+    if (currentUserProfile.perfil === 'Solicitante') {
+        if (!f.cr.value.trim() || !f.projeto.value.trim()) {
+            showNotification("CR e Projeto são obrigatórios.", "error");
+            return;
+        }
+        if (!f.quantidade.value || !f.valorUnitario.value) {
+            showNotification("Quantidade e Valor são obrigatórios.", "error");
+            return;
+        }
+        if (!f.nomeDemandante.value.trim()) {
+            showNotification("Demandante é obrigatório.", "error");
+            return;
+        }
+    }
 
-                 btn.disabled = true; btn.textContent = "...";
-                 try {
-                     const data = {
+    btn.disabled = true; btn.textContent = "...";
+    try {
+        const data = {
             unidade: f.unidade.value, 
             nomeDemandante: f.nomeDemandante.value,
             cr: f.cr.value, 
             projeto: f.projeto.value,
-            
-            // --- NOVA LINHA AQUI ---
-            // O 'f' representa o formulário, e 'unidadeMedida' é o 'name' que demos no HTML
-            unidadeMedida: f.unidadeMedida.value, // <<<<< ADICIONE ESTA LINHA
-            // -----------------------
-
+            unidadeMedida: f.unidadeMedida.value, 
             nomeProduto: f.nomeProduto.value, 
             codigoProduto: f.codigoProduto.value, 
             variacao: f.variacao.value,
@@ -4415,8 +4619,6 @@ document.getElementById('btn-novo-fornecedor')?.addEventListener('click', () => 
             valorUnitario: parseFloat(f.valorUnitario.value), 
             valorTotal: parseFloat(f.valorTotal.value),
             descricao: f.descricao.value,
-            
-            // ... restante dos campos (modalidade, numRN, status, etc.)
             modalidade: f.modalidade.value, 
             grupoDeCompra: f.grupoDeCompra.value,
             numRN: f.numRN.value, 
@@ -4425,62 +4627,50 @@ document.getElementById('btn-novo-fornecedor')?.addEventListener('click', () => 
             dataAberturaRN: f.dataAberturaRN.value, 
             dataPrevisao: f.dataPrevisao.value,
             fornecedor: f.fornecedor.value,
-            segmento: f.segmento.value
+            segmento: f.segmento.value,
+            // CORREÇÃO: Salvar RFA se o campo existir
+            rfa: f.rfa ? f.rfa.value : null
         };
-                     
-                     // NOVO: TRATAMENTO DE UPLOADS MÚLTIPLOS (Anexar arquivos)
-                     let uploadedUrls = [];
-                     const files = f.fileAttachments.files;
-                     
-                     for(let i=0; i < files.length; i++) {
-                         const file = files[i];
-                         const r = ref(storage, `artifacts/${appId}/docs/${Date.now()}_${file.name}`);
-                         await uploadBytes(r, file);
-                         const url = await getDownloadURL(r);
-                         uploadedUrls.push(url);
-                     }
-                     
-                     // Se houver anexo existente (edição), mescla as URLs
-                     let existingUrls = [];
-                     if (f.dataset.id) {
-                         const existing = state.pedidos.find(p => p.id === f.dataset.id);
-                         if (existing && existing.urlAnexos) {
-                              existingUrls = Array.isArray(existing.urlAnexos) ? existing.urlAnexos : [existing.urlAnexos];
-                         }
-                     }
-                     data.urlAnexos = [...existingUrls, ...uploadedUrls];
+                    
+        // NOVO: TRATAMENTO DE UPLOADS MÚLTIPLOS (Anexar arquivos)
+        let uploadedUrls = [];
+        const files = f.fileAttachments.files;
+        
+        for(let i=0; i < files.length; i++) {
+            const file = files[i];
+            const r = ref(storage, `artifacts/${appId}/docs/${Date.now()}_${file.name}`);
+            await uploadBytes(r, file);
+            const url = await getDownloadURL(r);
+            uploadedUrls.push(url);
+        }
+        
+        // Se houver anexo existente (edição), mescla as URLs
+        let existingUrls = [];
+        if (f.dataset.id) {
+            const existing = state.pedidos.find(p => p.id === f.dataset.id);
+            if (existing && existing.urlAnexos) {
+                existingUrls = Array.isArray(existing.urlAnexos) ? existing.urlAnexos : [existing.urlAnexos];
+            }
+        }
+        data.urlAnexos = [...existingUrls, ...uploadedUrls];
 
 
-                     if(f.dataset.id) {
-                          await updateDoc(doc(db, `artifacts/${appId}/public/data/pedidos`, f.dataset.id), data);
-                          showNotification("Pedido atualizado!", "success");
-                     } else {
-                          data.dataSolicitacao = Timestamp.now();
-                          data.solicitanteId = currentUser.uid;
-                          data.solicitanteEmail = currentUser.email;
-                          data.solicitanteNome = currentUserProfile.nome;
-                          // NOVO STATUS PADRÃO: Enviado para Aquisição
-                          data.status = 'enviado-aquisicao';
-                          await addDoc(collection(db, `artifacts/${appId}/public/data/pedidos`), data);
-                          showNotification("Pedido criado!", "success");
-                     }
-                     window.closePedidoModal();
-                 } catch(err){ console.error(err); showNotification("Erro ao salvar.", "error"); }
-                 finally{ btn.disabled=false; btn.textContent="Salvar"; }
-             });
-
-window.toggleSupplierDetails = (id) => {
-    const el = document.getElementById(`details-${id}`);
-    const icon = document.getElementById(`icon-${id}`);
-    
-    if (el.classList.contains('hidden')) {
-        el.classList.remove('hidden');
-        icon.style.transform = 'rotate(180deg)';
-    } else {
-        el.classList.add('hidden');
-        icon.style.transform = 'rotate(0deg)';
-    }
-};
+        if(f.dataset.id) {
+                await updateDoc(doc(db, `artifacts/${appId}/public/data/pedidos`, f.dataset.id), data);
+                showNotification("Pedido atualizado!", "success");
+        } else {
+                data.dataSolicitacao = Timestamp.now();
+                data.solicitanteId = currentUser.uid;
+                data.solicitanteEmail = currentUser.email;
+                data.solicitanteNome = currentUserProfile.nome;
+                data.status = 'enviado-aquisicao';
+                await addDoc(collection(db, `artifacts/${appId}/public/data/pedidos`), data);
+                showNotification("Pedido criado!", "success");
+        }
+        window.closePedidoModal();
+    } catch(err){ console.error(err); showNotification("Erro ao salvar.", "error"); }
+    finally{ btn.disabled=false; btn.textContent="Salvar"; }
+});
 
              // NOVO: Save Serviço Form (Atualizado para Edição)
 // NOVO: Save Serviço Form (Atualizado para Múltiplos Arquivos e Controle de Perfil)
@@ -4504,6 +4694,8 @@ document.getElementById('form-servico').addEventListener('submit', async e => {
             fornecedor: f.fornecedor.value,
             funcionario: f.funcionario.value
         };
+
+        
         
         // Dados de Aquisição (Lê dos novos inputs)
         // Só salva/atualiza se o usuário for gestor, ou se os campos existirem e tiverem valor
@@ -4517,6 +4709,7 @@ document.getElementById('form-servico').addEventListener('submit', async e => {
             data.variacao = document.getElementById('serv-variacao').value;
             data.modalidade = document.getElementById('serv-modalidade').value;
             data.grupoDeCompra = document.getElementById('serv-grupo').value;
+            data.rfa = document.getElementById('serv-rfa').value;
         }
 
         if (!docId) {
@@ -4767,12 +4960,12 @@ document.getElementById('form-fornecedor').addEventListener('submit', async e =>
                      let secondaryApp;
                      try {
                           // Initialize secondary app with unique name to avoid conflict
-                          secondaryApp = initializeApp(app.options, `Secondary_${Date.now()}`);
+                          secondaryApp = initializeApp(firebaseConfig, `Secondary_${Date.now()}`);
                           const secondaryAuth = getAuth(secondaryApp);
                           
                           // Create user
-                          const userCred = await createUserWithEmailAndPassword(secondaryAuth, f.email.value, pwd);
-                        const newUid = userCred.user.uid;
+                          await createUserWithEmailAndPassword(secondaryAuth, f.email.value, pwd);
+                          const newUid = userCred.user.uid;
                           
                           // Save to Firestore
                           await setDoc(doc(db, `artifacts/${appId}/public/data/user_profiles`, newUid), {
@@ -4889,6 +5082,7 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
         btnSubmit.disabled = false; btnSubmit.textContent = "Aplicar em Lote";
         return;
     }
+    
 
     // 3. Aplica as atualizações em lote usando a RN definida
     const batch = writeBatch(db);
@@ -4924,10 +5118,11 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
     } finally {
         btnSubmit.disabled = false; btnSubmit.textContent = "Aplicar em Lote";
     }
-});
-        
-    </script>
+}); // Fecha o document.addEventListener('DOMContentLoaded'
+    
+</script>
 </head>
+        
 <body class="h-full text-gray-800">
 
     <!-- LOGIN -->
@@ -5099,33 +5294,44 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
             <!-- SOLICITACOES PAGE -->
             <div id="solicitacoes" class="page-content hidden w-full">
                 <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
-                    <h2 class="text-2xl font-bold text-gray-900">Solicitações de Compra</h2>
-                    <button onclick="openPedidoModal()" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500">
-                        <svg class="-ml-1 mr-2 h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" /></svg>
-                        Nova Solicitação
-                    </button>
-                </div>
-    
-                <!-- Filtros -->
-                <div class="bg-white p-4 rounded-lg shadow-sm border border-gray-200 mb-6 grid grid-cols-1 md:grid-cols-5 gap-4">
-    <div>
+    <h2 class="text-2xl font-bold text-gray-900">Solicitações de Compra</h2>
+    <div class="flex gap-2">
+        <button onclick="window.openRelatorioGastos()" class="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 focus:outline-none">
+            <svg class="mr-2 -ml-1 h-5 w-5 text-purple-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+            </svg>
+            Relatório Gastos (CR/Proj)
+        </button>
+        <button onclick="openPedidoModal()" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500">
+            <svg class="-ml-1 mr-2 h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" /></svg>
+            Nova Solicitação
+        </button>
+    </div>
+</div>
+
+<div class="bg-white p-4 rounded-lg shadow-sm border border-gray-200 mb-6 grid grid-cols-1 md:grid-cols-6 gap-4">
+    <div class="md:col-span-1">
         <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Buscar RN/OC</label>
         <input type="text" id="filter-search" placeholder="RN ou OC..." class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-gray-50">
     </div>
+    <div class="md:col-span-1">
+        <label class="block text-xs font-bold text-purple-600 uppercase tracking-wider mb-1">Buscar RFA</label>
+        <input type="text" id="filter-rfa" placeholder="Nº RFA..." class="block w-full rounded-md border-purple-300 shadow-sm sm:text-sm p-2 border bg-purple-50 focus:bg-white">
+    </div>
     
-    <div>
+    <div class="md:col-span-1">
         <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Fornecedor</label>
         <input type="text" id="filter-fornecedor-specific" placeholder="Nome..." class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-gray-50">
     </div>
-    <div>
+    <div class="md:col-span-1">
         <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Unidade</label>
         <select id="filter-unidade" class="block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm rounded-md border bg-gray-50"></select>
     </div>
-    <div>
+    <div class="md:col-span-1">
         <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Modalidade</label>
         <select id="filter-modalidade" class="block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm rounded-md border bg-gray-50"></select>
     </div>
-    <div>
+    <div class="md:col-span-1">
         <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Status</label>
         <select id="filter-status" class="block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm rounded-md border bg-gray-50"></select>
     </div>
@@ -5188,28 +5394,33 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
         </div>
     </div>
 
-    <div class="bg-white p-4 rounded-lg shadow-sm border border-gray-200 mb-6 grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div>
-            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Unidade</label>
-            <select id="filter-serv-unidade" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-gray-50" onchange="renderServicosPage()">
-                <option value="">Todas</option>
-            </select>
-        </div>
-        <div>
-            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Fornecedor</label>
-            <input type="text" id="filter-serv-fornecedor" placeholder="Nome do fornecedor..." class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-gray-50" oninput="renderServicosPage()">
-        </div>
-        <div>
-            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Data Prevista</label>
-            <input type="date" id="filter-serv-data" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-gray-50" onchange="renderServicosPage()">
-        </div>
-        <div>
-            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Status</label>
-            <select id="filter-serv-status" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-gray-50" onchange="renderServicosPage()">
-                <option value="">Todos</option>
-                </select>
-        </div>
+    <div class="bg-white p-4 rounded-lg shadow-sm border border-gray-200 mb-6 grid grid-cols-1 md:grid-cols-5 gap-4">
+    <div>
+        <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Unidade</label>
+        <select id="filter-serv-unidade" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-gray-50" onchange="renderServicosPage()">
+            <option value="">Todas</option>
+        </select>
     </div>
+    <div>
+        <label class="block text-xs font-bold text-purple-600 uppercase tracking-wider mb-1">Buscar RFA</label>
+        <input type="text" id="filter-serv-rfa" placeholder="Nº RFA..." class="block w-full rounded-md border-purple-300 shadow-sm sm:text-sm p-2 border bg-purple-50 focus:bg-white" oninput="renderServicosPage()">
+    </div>
+
+    <div>
+        <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Fornecedor</label>
+        <input type="text" id="filter-serv-fornecedor" placeholder="Nome do fornecedor..." class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-gray-50" oninput="renderServicosPage()">
+    </div>
+    <div>
+        <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Data Prevista</label>
+        <input type="date" id="filter-serv-data" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-gray-50" onchange="renderServicosPage()">
+    </div>
+    <div>
+        <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Status</label>
+        <select id="filter-serv-status" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-gray-50" onchange="renderServicosPage()">
+            <option value="">Todos</option>
+        </select>
+    </div>
+</div>
     <div class="bg-white shadow-sm border border-gray-200 rounded-lg overflow-hidden">
         <div class="overflow-x-auto">
             <table class="min-w-full divide-y divide-gray-200">
@@ -5233,7 +5444,7 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
       <div id="gestao-nf" class="page-content hidden w-full">
     <div class="flex justify-between items-center mb-6">
         <h2 class="text-2xl font-bold text-gray-900">Gestão de Nota Fiscal</h2>
-        <button id="btn-relatorio-mensal" onclick="openRelatorioMensal()" class="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 focus:outline-none">
+        <button onclick="openRelatorioMensal()" class="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 focus:outline-none">
             <svg class="mr-2 -ml-1 h-5 w-5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
             </svg>
@@ -5789,6 +6000,10 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
                                     <label class="block text-[10px] font-bold text-blue-700 uppercase mb-1">Grupo de Compra</label>
                                     <select id="serv-grupo" class="block w-full rounded border-blue-300 shadow-sm sm:text-xs p-2 bg-white"></select>
                                 </div>
+                                <div class="col-span-3">
+    <label class="block text-[10px] font-bold text-purple-700 uppercase mb-1">RFA (Aprovação)</label>
+    <input id="serv-rfa" class="block w-full rounded border-purple-300 shadow-sm sm:text-xs p-2 bg-purple-50">
+</div>
                             </div>
                         </div>
                     </div>
@@ -6043,7 +6258,7 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
 
 
         <!-- Pedido Modal -->
-       <div id="modal-pedido" class="relative z-50 hidden">
+<div id="modal-pedido" class="relative z-50 hidden">
     <div class="fixed inset-0 bg-gray-900/75 backdrop-blur-sm transition-opacity"></div>
     <div class="fixed inset-0 z-10 overflow-y-auto">
         <div class="flex min-h-full items-center justify-center p-4 text-center sm:p-0">
@@ -6102,37 +6317,35 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
                             <div class="col-span-8"></div>
 
                             <div class="col-span-8 grid grid-cols-4 gap-4">
-    
-    <div>
-        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Un. Medida</label>
-        <select name="unidadeMedida" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-white">
-            <option value="Un">Un (Unidade)</option>
-            <option value="Kg">Kg (Quilo)</option>
-            <option value="L">L (Litro)</option>
-            <option value="m">m (Metro)</option>
-            <option value="m²">m² (Metro Quad.)</option>
-            <option value="cx">Cx (Caixa)</option>
-            <option value="pct">Pct (Pacote)</option>
-            <option value="fardo">Fardo</option>
-            <option value="par">Par</option>
-            <option value="galão">Galão</option>
-            <option value="jogo">Jogo/Kit</option>
-        </select>
-    </div>
-
-    <div>
-        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Qtd</label>
-        <input type="number" id="inp-qtd" name="quantidade" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-    </div>
-    <div>
-        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Valor Unit.</label>
-        <input type="number" step="0.01" id="inp-val" name="valorUnitario" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-    </div>
-    <div>
-        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Valor Total</label>
-        <input type="number" id="inp-tot" name="valorTotal" readonly class="block w-full rounded-md border-gray-300 bg-gray-100 shadow-sm sm:text-sm p-2 border cursor-not-allowed font-bold text-gray-700">
-    </div>
-</div>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Un. Medida</label>
+                                    <select name="unidadeMedida" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-white">
+                                        <option value="Un">Un</option>
+                                        <option value="Kg">Kg</option>
+                                        <option value="L">L</option>
+                                        <option value="m">m</option>
+                                        <option value="m²">m²</option>
+                                        <option value="cx">Cx</option>
+                                        <option value="pct">Pct</option>
+                                        <option value="fardo">Fardo</option>
+                                        <option value="par">Par</option>
+                                        <option value="galão">Galão</option>
+                                        <option value="jogo">Jogo</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Qtd</label>
+                                    <input type="number" id="inp-qtd" name="quantidade" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Valor Unit.</label>
+                                    <input type="number" step="0.01" id="inp-val" name="valorUnitario" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Valor Total</label>
+                                    <input type="number" id="inp-tot" name="valorTotal" readonly class="block w-full rounded-md border-gray-300 bg-gray-100 shadow-sm sm:text-sm p-2 border cursor-not-allowed font-bold text-gray-700">
+                                </div>
+                            </div>
 
                             <div class="col-span-12">
                                 <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Observações</label>
@@ -6156,16 +6369,17 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
                             <div class="grid grid-cols-12 gap-4">
                                 <div class="col-span-4">
                                     <label class="block text-xs font-medium text-gray-500 mb-1">Modalidade</label>
-                                    <select name="modalidade" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-white"></select>
+                                    <select name="modalidade" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-white"></select>
                                 </div>
                                 <div class="col-span-4">
                                     <label class="block text-xs font-medium text-gray-500 mb-1">Grupo</label>
-                                    <select name="grupoDeCompra" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-white"></select>
+                                    <select name="grupoDeCompra" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-white"></select>
                                 </div>
                                 <div class="col-span-4">
                                     <label class="block text-xs font-medium text-gray-500 mb-1">Status</label>
-                                    <select name="status" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-white"></select>
+                                    <select name="status" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-white"></select>
                                 </div>
+                                
                                 <div class="col-span-3">
                                     <label class="block text-xs font-medium text-gray-500 mb-1">Nº RN</label>
                                     <input name="numRN" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-white">
@@ -6182,6 +6396,7 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
                                     <label class="block text-xs font-medium text-gray-500 mb-1">Previsão</label>
                                     <input name="dataPrevisao" type="date" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-white">
                                 </div>
+
                                 <div class="col-span-6">
                                     <label class="block text-xs font-medium text-gray-500 mb-1">Fornecedor Definido</label>
                                     <input list="fornecedores-datalist" name="fornecedor" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-white" placeholder="Digite para buscar...">
@@ -6191,9 +6406,14 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
                                     <label class="block text-xs font-medium text-gray-500 mb-1">Segmento</label>
                                     <input name="segmento" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-white">
                                 </div>
-                            </div>
+                                
+                                <div class="col-span-3">
+                                   <label class="block text-xs font-bold text-purple-700 mb-1">RFA (Aprovação)</label>
+                                   <input name="rfa" class="block w-full rounded-md border-purple-300 shadow-sm focus:border-purple-500 focus:ring-purple-500 sm:text-sm p-2 border bg-purple-50">
+                               </div>
+                               </div>
                         </div>
-                        </div>
+                    </div>
                     
                     <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse border-t border-gray-200">
                         <button type="submit" id="btn-save-pedido" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-primary-600 text-base font-medium text-white hover:bg-primary-700 focus:outline-none sm:ml-3 sm:w-auto sm:text-sm">Salvar</button>
@@ -6637,6 +6857,38 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
 
 // acaba aqui
 
+<div id="modal-relatorio-gastos" class="relative z-50 hidden">
+    <div class="fixed inset-0 bg-gray-900/75 backdrop-blur-sm transition-opacity"></div>
+    <div class="fixed inset-0 z-10 overflow-y-auto">
+        <div class="flex min-h-full items-center justify-center p-4">
+            <div class="bg-white rounded-lg shadow-xl w-full max-w-5xl p-6 h-[90vh] flex flex-col">
+                
+                <div class="flex justify-between items-center mb-4 border-b pb-4">
+                    <h3 class="text-xl font-bold text-gray-900 flex items-center gap-2">
+                        <svg class="w-6 h-6 text-purple-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>
+                        Relatório de Gastos (CR & Projeto)
+                    </h3>
+                    <div class="flex gap-2">
+                        <select id="rel-gastos-mes" class="rounded border-gray-300 text-sm p-1 border" onchange="renderRelatorioGastosContent()"></select>
+                        <select id="rel-gastos-ano" class="rounded border-gray-300 text-sm p-1 border" onchange="renderRelatorioGastosContent()"></select>
+                        <button onclick="document.getElementById('modal-relatorio-gastos').classList.add('hidden')" class="text-gray-400 hover:text-gray-500">
+                            <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="flex-1 overflow-y-auto pr-2" id="relatorio-gastos-content">
+                    </div>
+
+                <div class="mt-4 pt-4 border-t flex justify-between items-center bg-gray-50 p-4 rounded">
+                    <span class="text-sm text-gray-500">Apenas pedidos Ativos (não cancelados).</span>
+                    <div class="text-xl font-bold text-gray-900">Total Geral: <span id="rel-gastos-total" class="text-purple-700">R$ 0,00</span></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
 <div id="modal-gerenciar-fornecedores" class="relative z-50 hidden">
     <div class="fixed inset-0 bg-gray-900/75 backdrop-blur-sm transition-opacity"></div>
     <div class="fixed inset-0 z-10 overflow-y-auto">
@@ -6692,9 +6944,20 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
     </div>
 </div>
 
-                <form id="form-fornecedor-contrato" class="hidden space-y-4">
+
+<form id="form-fornecedor-contrato" class="hidden space-y-4">
+    <div class="bg-blue-50 p-4 rounded border border-blue-200 mb-4">
+        <label class="block text-xs font-bold text-blue-800 uppercase mb-1">Limite de Crédito Anual (Saldo do Contrato)</label>
+        <div class="relative rounded-md shadow-sm">
+            <div class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
+                <span class="text-gray-500 sm:text-sm">R$</span>
+            </div>
+            <input type="number" step="0.01" name="saldoAnual" class="block w-full rounded-md border-blue-300 pl-10 focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2" placeholder="0.00">
+        </div>
+        <p class="text-[10px] text-blue-600 mt-1">Defina o valor máximo que pode ser gasto com este fornecedor neste ano.</p>
+    </div>
+
     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-        
         <div>
             <label class="block text-xs font-bold text-gray-700 uppercase mb-1">Fornecedor</label>
             <input name="fornecedor" required class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border">
@@ -6728,7 +6991,6 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
     </div>
 
     <div class="grid grid-cols-1 md:grid-cols-2 gap-4 border-t pt-4 border-gray-200">
-        
         <div>
             <label class="block text-xs font-bold text-gray-700 uppercase mb-1">Condição de Pagamento</label>
             <input name="pagamento" placeholder="Ex: 30 dias, A vista..." class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border">
@@ -6740,29 +7002,26 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
         </div>
 
         <div class="col-span-1 md:col-span-2 bg-gray-50 p-3 rounded border border-gray-200">
-    <label class="block text-xs font-bold text-gray-700 uppercase mb-2">Itens do Contrato</label>
-    
-    <div class="flex flex-col md:flex-row gap-2 mb-2">
-        <input type="text" id="new-item-desc" placeholder="Descrição do item/serviço..." class="flex-1 rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border">
-        <button type="button" onclick="addContractItem()" class="bg-green-600 text-white px-3 py-2 rounded hover:bg-green-700 text-sm font-bold">
-            + Adicionar
-        </button>
-    </div>
-
-    <div class="overflow-hidden rounded-md border border-gray-300 bg-white">
-        <table class="min-w-full divide-y divide-gray-200">
-            <thead class="bg-gray-100">
-                <tr>
-                    <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Descrição</th>
-                    <th class="px-3 py-2 w-10"></th>
-                </tr>
-            </thead>
-            <tbody id="lista-itens-contrato-temp" class="divide-y divide-gray-200">
-                </tbody>
-        </table>
-        <div id="empty-itens-msg" class="p-4 text-center text-xs text-gray-400 italic">Nenhum item adicionado.</div>
-    </div>
-</div>
+            <label class="block text-xs font-bold text-gray-700 uppercase mb-2">Itens do Contrato</label>
+            <div class="flex flex-col md:flex-row gap-2 mb-2">
+                <input type="text" id="new-item-desc" placeholder="Descrição do item/serviço..." class="flex-1 rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border">
+                <button type="button" onclick="addContractItem()" class="bg-green-600 text-white px-3 py-2 rounded hover:bg-green-700 text-sm font-bold">
+                    + Adicionar
+                </button>
+            </div>
+            <div class="overflow-hidden rounded-md border border-gray-300 bg-white">
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-100">
+                        <tr>
+                            <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Descrição</th>
+                            <th class="px-3 py-2 w-10"></th>
+                        </tr>
+                    </thead>
+                    <tbody id="lista-itens-contrato-temp" class="divide-y divide-gray-200"></tbody>
+                </table>
+                <div id="empty-itens-msg" class="p-4 text-center text-xs text-gray-400 italic">Nenhum item adicionado.</div>
+            </div>
+        </div>
 
         <div class="col-span-1 md:col-span-2">
             <label class="block text-xs font-bold text-gray-700 uppercase mb-1">Justificativa da Contratação</label>
@@ -6777,8 +7036,7 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
 
     <div class="mt-4">
         <label class="block text-xs font-bold text-gray-700 uppercase mb-2">Unidades que podem utilizar (Selecione)</label>
-        <div id="checkboxes-unidades-uso" class="grid grid-cols-2 md:grid-cols-4 gap-2 bg-gray-50 p-3 rounded border border-gray-200 max-h-40 overflow-y-auto">
-            </div>
+        <div id="checkboxes-unidades-uso" class="grid grid-cols-2 md:grid-cols-4 gap-2 bg-gray-50 p-3 rounded border border-gray-200 max-h-40 overflow-y-auto"></div>
     </div>
 
     <div class="flex justify-end gap-2 pt-4 border-t mt-4">
