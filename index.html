@@ -4767,12 +4767,12 @@ document.getElementById('form-fornecedor').addEventListener('submit', async e =>
                      let secondaryApp;
                      try {
                           // Initialize secondary app with unique name to avoid conflict
-                          secondaryApp = initializeApp(firebaseConfig, `Secondary_${Date.now()}`);
+                          secondaryApp = initializeApp(app.options, `Secondary_${Date.now()}`);
                           const secondaryAuth = getAuth(secondaryApp);
                           
                           // Create user
-                          await createUserWithEmailAndPassword(secondaryAuth, f.email.value, pwd);
-                          const newUid = userCred.user.uid;
+                          const userCred = await createUserWithEmailAndPassword(secondaryAuth, f.email.value, pwd);
+                        const newUid = userCred.user.uid;
                           
                           // Save to Firestore
                           await setDoc(doc(db, `artifacts/${appId}/public/data/user_profiles`, newUid), {
