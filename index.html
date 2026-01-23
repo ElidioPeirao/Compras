@@ -61,12 +61,21 @@
     <script type="module" src="https://unpkg.com/heroicons@2.1.3/24/outline/index.js"></script>
     
     <!-- Firebase -->
-    <script type="module">
+   <script type="module">
         import { app, auth, db, storage, appId } from "./firebase-config.js";
         import { initializeApp, deleteApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, collection, addDoc, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, onSnapshot, query, where, Timestamp, orderBy, limit, writeBatch, deleteField, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        
+        // CORREÇÃO: Importação consolidada e correta do Firestore (incluindo arrayUnion)
+        import { 
+            getFirestore, collection, addDoc, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, 
+            onSnapshot, query, where, Timestamp, orderBy, limit, writeBatch, deleteField, 
+            setLogLevel, arrayUnion 
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        
         import { getStorage, ref, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
+
+        // ... Restante do código (let currentUser = null; etc) continua igual ...
 
         
         let currentUser = null;
@@ -183,21 +192,64 @@ async function fetchContratos() {
 }
 
         const STATUS_MAP = {
-            // NOVO STATUS: ENVIADO PARA AQUISIÇÃO
-            "enviado-aquisicao": { text: "Enviado p/ Aquisição", class: "bg-blue-200 text-blue-900 ring-blue-700/20 font-bold", iconColor: "text-blue-700", bgIcon: "bg-blue-300" },
-            "pendencia": { text: "Com Pendência", class: "bg-rose-100 text-rose-800 ring-rose-600/20 font-bold", iconColor: "text-rose-600", bgIcon: "bg-rose-100" }, 
-            "a-inserir-rn": { text: "A Inserir RN", class: "bg-yellow-100 text-yellow-900 ring-yellow-700/20 font-bold", iconColor: "text-yellow-700", bgIcon: "bg-yellow-200" },
+    // --- STATUS COMUNS ---
+    "enviado-aquisicao": { text: "Enviado p/ Aquisição", class: "bg-blue-200 text-blue-900 ring-blue-700/20 font-bold", iconColor: "text-blue-700", bgIcon: "bg-blue-300" },
+    "pendencia": { text: "Com Pendência", class: "bg-rose-100 text-rose-800 ring-rose-600/20 font-bold", iconColor: "text-rose-600", bgIcon: "bg-rose-100" },
+    "a-inserir-rn": { text: "A Inserir RN", class: "bg-yellow-100 text-yellow-900 ring-yellow-700/20 font-bold", iconColor: "text-yellow-700", bgIcon: "bg-yellow-200" },
+    "a-abrir-rn": { text: "A Abrir RN", class: "bg-blue-50 text-blue-700 ring-blue-600/20", iconColor: "text-blue-600", bgIcon: "bg-blue-100" },
+    "em-cotacao": { text: "Em Cotação", class: "bg-yellow-50 text-yellow-800 ring-yellow-600/20", iconColor: "text-yellow-600", bgIcon: "bg-yellow-100" },
+    "registrado": { text: "Registrado", class: "bg-gray-50 text-gray-600 ring-gray-500/10", iconColor: "text-gray-600", bgIcon: "bg-gray-100" },
+    "finalizado": { text: "Finalizado", class: "bg-green-50 text-green-700 ring-green-600/20", iconColor: "text-green-600", bgIcon: "bg-green-100" },
+    "cancelado": { text: "Cancelado", class: "bg-red-50 text-red-700 ring-red-600/10", iconColor: "text-red-600", bgIcon: "bg-red-100" },
+    
+    // --- STATUS ESPECÍFICOS DE PRODUTOS (Serão filtrados fora de serviços) ---
+    "aguardando-entrega": { text: "Aguardando Entrega", class: "bg-orange-50 text-orange-700 ring-orange-600/20", iconColor: "text-orange-600", bgIcon: "bg-orange-100" },
+    "entregue": { text: "Entregue", class: "bg-purple-50 text-purple-700 ring-purple-700/10", iconColor: "text-purple-600", bgIcon: "bg-purple-100" },
+    "aguardando-lancamento": { text: "Aguardando Lançamento", class: "bg-cyan-50 text-cyan-700 ring-cyan-600/20", iconColor: "text-cyan-600", bgIcon: "bg-cyan-100" },
+    "em-atraso": { text: "Em Atraso", class: "bg-red-100 text-red-800 ring-red-600/20 font-bold", iconColor: "text-red-800", bgIcon: "bg-red-200" },
 
-            "a-abrir-rn": { text: "A Abrir RN", class: "bg-blue-50 text-blue-700 ring-blue-600/20", iconColor: "text-blue-600", bgIcon: "bg-blue-100" },
-            "em-cotacao": { text: "Em Cotação", class: "bg-yellow-50 text-yellow-800 ring-yellow-600/20", iconColor: "text-yellow-600", bgIcon: "bg-yellow-100" },
-            "registrado": { text: "Registrado", class: "bg-gray-50 text-gray-600 ring-gray-500/10", iconColor: "text-gray-600", bgIcon: "bg-gray-100" },
-            "aguardando-entrega": { text: "Aguardando Entrega", class: "bg-orange-50 text-orange-700 ring-orange-600/20", iconColor: "text-orange-600", bgIcon: "bg-orange-100" },
-            "entregue": { text: "Entregue", class: "bg-purple-50 text-purple-700 ring-purple-700/10", iconColor: "text-purple-600", bgIcon: "bg-purple-100" },
-            "aguardando-lancamento": { text: "Aguardando Lançamento", class: "bg-cyan-50 text-cyan-700 ring-cyan-600/20", iconColor: "text-cyan-600", bgIcon: "bg-cyan-100" },
-            "finalizado": { text: "Finalizado", class: "bg-green-50 text-green-700 ring-green-600/20", iconColor: "text-green-600", bgIcon: "bg-green-100" },
-            "cancelado": { text: "Cancelado", class: "bg-red-50 text-red-700 ring-red-600/10", iconColor: "text-red-600", bgIcon: "bg-red-100" },
-            "em-atraso": { text: "Em Atraso", class: "bg-red-100 text-red-800 ring-red-600/20 font-bold", iconColor: "text-red-800", bgIcon: "bg-red-200" }
-        };
+    // --- NOVOS STATUS ESPECÍFICOS DE SERVIÇOS ---
+    "aguardando-documentos": { text: "Aguardando Documentos", class: "bg-indigo-50 text-indigo-700 ring-indigo-600/20", iconColor: "text-indigo-600", bgIcon: "bg-indigo-100" },
+    "aguardando-fap": { text: "Aguardando FAP", class: "bg-amber-50 text-amber-700 ring-amber-600/20", iconColor: "text-amber-600", bgIcon: "bg-amber-100" },
+    "aguardando-ssma": { text: "Aguardando Liberação SSMA", class: "bg-rose-50 text-rose-700 ring-rose-600/20", iconColor: "text-rose-600", bgIcon: "bg-rose-100" },
+    "aguardando-inicio": { text: "Aguardando Início", class: "bg-sky-50 text-sky-700 ring-sky-600/20", iconColor: "text-sky-600", bgIcon: "bg-sky-100" },
+    "em-andamento": { text: "Em Andamento", class: "bg-blue-100 text-blue-800 ring-blue-700/20 font-bold", iconColor: "text-blue-700", bgIcon: "bg-blue-200" },
+    "prorrogado": { text: "Prorrogado", class: "bg-purple-100 text-purple-800 ring-purple-600/20", iconColor: "text-purple-600", bgIcon: "bg-purple-200" },
+    "verificar": { text: "Verificar", class: "bg-yellow-100 text-yellow-800 ring-yellow-600/20 font-bold", iconColor: "text-yellow-600", bgIcon: "bg-yellow-200" }
+};
+
+// Lista específica para o dropdown de Serviços (Define a ordem e o que aparece)
+const SERVICE_STATUS_OPTIONS = [
+    "enviado-aquisicao",
+    "pendencia",
+    "em-cotacao",
+    "registrado",
+    "aguardando-documentos",
+    "aguardando-fap",
+    "aguardando-ssma",
+    "aguardando-inicio",
+    "em-andamento",
+    "prorrogado",
+    "verificar",
+    "finalizado",
+    "cancelado"
+];
+
+// Lista específica para o dropdown de Suprimentos (Produtos)
+// Lista específica para o dropdown de Suprimentos (Produtos)
+const PRODUCT_STATUS_OPTIONS = [
+    "enviado-aquisicao",
+    "pendencia",
+    "a-abrir-rn",
+    "em-cotacao",
+    "registrado",
+    "aguardando-entrega",
+    "entregue",
+    "verificar", // <--- ADICIONADO
+    "cancelado",
+    "em-atraso"
+    // REMOVIDOS: "a-inserir-rn", "aguardando-lancamento", "finalizado"
+];
 
         // Regras de Compliance
         const COMPLIANCE_STATUS = {
@@ -597,38 +649,45 @@ window.deleteServico = (id) => {
 
         // --- DATA & RENDER ---
         function populateFilters() {
-            const u = document.getElementById('filter-unidade');
-            const m = document.getElementById('filter-modalidade');
-            const s = document.getElementById('filter-status');
-            
-            const curU = u?.value || ""; 
-            const curM = m?.value || ""; 
-            const curS = s?.value || "";
+    const u = document.getElementById('filter-unidade');
+    const m = document.getElementById('filter-modalidade');
+    const s = document.getElementById('filter-status');
+    
+    const curU = u?.value || ""; 
+    const curM = m?.value || ""; 
+    const curS = s?.value || "";
 
-            if (u) {
-                u.innerHTML = '<option value="">Todas Unidades</option>';
-                // Agora usa a lista dinâmica
-                state.unidades.forEach(x => u.innerHTML += `<option value="${x}">${x}</option>`);
-                u.value = curU;
-            }
-            
-            if (m) {
-                m.innerHTML = '<option value="">Todas Modalidades</option>';
-                state.modalidadesList.forEach(x => m.innerHTML += `<option value="${x}">${x}</option>`);
-                m.value = curM;
+    if (u) {
+        u.innerHTML = '<option value="">Todas Unidades</option>';
+        state.unidades.forEach(x => u.innerHTML += `<option value="${x}">${x}</option>`);
+        u.value = curU;
+    }
+    
+    if (m) {
+        m.innerHTML = '<option value="">Todas Modalidades</option>';
+        state.modalidadesList.forEach(x => m.innerHTML += `<option value="${x}">${x}</option>`);
+        m.value = curM;
+    }
+
+    if (s) {
+        s.innerHTML = '<option value="">Todos Status</option>';
+        
+        // CORREÇÃO: Usa a lista restrita de PRODUTOS
+        PRODUCT_STATUS_OPTIONS.forEach(key => {
+            // Lógica de permissão: Solicitante não vê "A Inserir RN"
+            if (currentUserProfile.perfil === 'Solicitante' && key === 'a-inserir-rn') {
+                return;
             }
 
-            if (s) {
-                s.innerHTML = '<option value="">Todos Status</option>';
-                // Adiciona o status de RN pendente manualmente se for gestor, pois ele não deve ser usado em pedidos normais
-                if (currentUserProfile.perfil !== 'Solicitante') {
-                    s.innerHTML += `<option value="enviado-aquisicao">${STATUS_MAP["enviado-aquisicao"].text}</option>`;
-                    s.innerHTML += `<option value="a-inserir-rn">${STATUS_MAP["a-inserir-rn"].text}</option>`;
-                }
-                Object.entries(STATUS_MAP).filter(([k]) => k !== 'a-inserir-rn' && k !== 'enviado-aquisicao').forEach(([k,v]) => s.innerHTML += `<option value="${k}">${v.text}</option>`);
-                s.value = curS;
+            const config = STATUS_MAP[key];
+            if (config) {
+                s.innerHTML += `<option value="${key}">${config.text}</option>`;
             }
-        }
+        });
+
+        s.value = curS;
+    }
+}
 
         function checkIsLate(item) {
             if (!item.status) return false;
@@ -991,6 +1050,7 @@ window.sortPedidos = (field) => {
         // --- NOVA TABELA DE SERVIÇOS ---
 // CORREÇÃO: Sintaxe correta para tornar a função global
 // CORRIGIDO: window.renderServicosPage = function() ...
+// CORRIGIDO: window.renderServicosPage = function() ...
 window.renderServicosPage = function() {
     const tbody = document.getElementById('tabela-servicos-body');
     if (!tbody) return;
@@ -998,18 +1058,19 @@ window.renderServicosPage = function() {
 
     const perfil = currentUserProfile.perfil || "Solicitante";
 
-    // --- 1. POPULAR FILTROS (Unidade e Status) se necessário ---
+    // --- 1. POPULAR FILTROS (Unidade e Status) ---
     const selUnidade = document.getElementById('filter-serv-unidade');
     const selStatus = document.getElementById('filter-serv-status');
 
-    // Popula Unidades se tiver apenas a opção padrão
     if (selUnidade && selUnidade.options.length <= 1 && state.unidades.length > 0) {
         state.unidades.forEach(u => selUnidade.innerHTML += `<option value="${u}">${u}</option>`);
     }
-    // Popula Status se tiver apenas a opção padrão
+    
+    // CORREÇÃO: Popula o filtro APENAS com os status de SERVIÇO
     if (selStatus && selStatus.options.length <= 1) {
-        Object.entries(STATUS_MAP).filter(([k]) => k !== 'a-inserir-rn').forEach(([k,v]) => {
-            selStatus.innerHTML += `<option value="${k}">${v.text}</option>`;
+        SERVICE_STATUS_OPTIONS.forEach(key => {
+            const config = STATUS_MAP[key];
+            if(config) selStatus.innerHTML += `<option value="${key}">${config.text}</option>`;
         });
     }
 
@@ -1021,15 +1082,13 @@ window.renderServicosPage = function() {
 
     // --- 3. FILTRAGEM ---
     let list = state.pedidos.filter(p => {
-        // Filtro Básico (Tipo e Permissão)
         if (p.modalidade !== 'Serviço') return false;
         if (perfil === 'Solicitante' && p.solicitanteId !== currentUser.uid && p.nomeDemandante !== currentUserProfile.nome) return false;
 
-        // Filtros da Tela
         if (fUnidade && p.unidade !== fUnidade) return false;
         if (fStatus && p.status !== fStatus) return false;
         if (fFornecedor && !(p.fornecedor || '').toLowerCase().includes(fFornecedor)) return false;
-        if (fData && p.dataPrevisao !== fData) return false; // Filtro de data exata
+        if (fData && p.dataPrevisao !== fData) return false;
 
         return true;
     });
@@ -1049,7 +1108,8 @@ window.renderServicosPage = function() {
         }
 
         const canEdit = (perfil === 'Solicitante' && item.status === 'enviado-aquisicao') || perfil !== 'Solicitante';
-        const buttonsHtml = canEdit ? `
+        
+        const actionButtonsHtml = canEdit ? `
             <button onclick="window.openServicoModal('${item.id}')" class="text-blue-600 hover:text-blue-800 mr-2" title="Editar">
                 <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
             </button>
@@ -1057,6 +1117,14 @@ window.renderServicosPage = function() {
                 <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
             </button>
         ` : '';
+
+        const hasAnexos = (item.urlOrcamentos && item.urlOrcamentos.length > 0) || item.urlOrcamento;
+        const anexosBtnHtml = hasAnexos 
+            ? `<button onclick="window.openServiceAttachments('${item.id}')" class="text-blue-600 hover:text-blue-800 text-xs mr-2 border border-blue-200 px-2 py-1 rounded bg-blue-50 flex items-center gap-1">
+                 <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg>
+                 Orçamentos
+               </button>` 
+            : '';
 
         tbody.innerHTML += `
             <tr class="hover:bg-gray-50 border-b border-gray-100">
@@ -1072,8 +1140,8 @@ window.renderServicosPage = function() {
                     <span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${st.class}">${st.text}</span>
                 </td>
                 <td class="px-4 py-3 text-right flex justify-end items-center gap-2">
-                     ${item.urlOrcamento ? `<a href="${item.urlOrcamento}" target="_blank" class="text-blue-600 hover:underline text-xs mr-2 border border-blue-200 px-2 py-1 rounded bg-blue-50">Orçamento</a>` : ''}
-                     ${buttonsHtml}
+                      ${anexosBtnHtml}
+                      ${actionButtonsHtml}
                 </td>
             </tr>
         `;
@@ -1990,48 +2058,101 @@ window.openServicoModal = (id = null) => {
     f.reset();
     f.dataset.id = id || "";
     
-    // Limpa alertas
     const alertDiv = document.getElementById('service-employee-alert');
     if(alertDiv) alertDiv.classList.add('hidden');
+    document.getElementById('lista-anexos-existentes').innerHTML = '';
 
     const btnSubmit = f.querySelector('button[type="submit"]');
     const titleModal = f.closest('.relative').querySelector('h3');
     
-    // 1. Preenche Unidades
+    // Elementos de Controle
+    const divForn = document.getElementById('div-servico-fornecedor');
+    const divFunc = document.getElementById('div-servico-funcionario');
+    const areaAquisicao = document.getElementById('area-aquisicao-servico');
+    
+    const isSolicitante = currentUserProfile.perfil === 'Solicitante';
+
+    // --- LÓGICA DE VISIBILIDADE ---
+    if (isSolicitante) {
+        // Solicitante: Esconde Fornecedor, Funcionário e Área de Aquisição
+        if(divForn) divForn.classList.add('hidden');
+        if(divFunc) divFunc.classList.add('hidden');
+        if(areaAquisicao) areaAquisicao.classList.add('hidden');
+    } else {
+        // Gestor: Mostra tudo
+        if(divForn) divForn.classList.remove('hidden');
+        if(divFunc) divFunc.classList.remove('hidden');
+        if(areaAquisicao) areaAquisicao.classList.remove('hidden');
+    }
+
+    // 1. Popula Selects Principais
     f.unidade.innerHTML = ''; 
     state.unidades.forEach(x => f.unidade.innerHTML += `<option value="${x}">${x}</option>`);
 
-    // 2. Preenche Status (NOVO)
+    // 2. Preenche Status (USANDO A LISTA ESPECÍFICA DE SERVIÇOS)
     f.status.innerHTML = '';
-    // Adiciona opções de status. Se for Solicitante criando, trava em 'enviado-aquisicao' visualmente ou deixa selecionar?
-    // Vamos deixar selecionar para simplificar a edição
-    Object.entries(STATUS_MAP).filter(([k]) => k !== 'a-inserir-rn').forEach(([k,v]) => {
-         f.status.innerHTML += `<option value="${k}">${v.text}</option>`;
+    SERVICE_STATUS_OPTIONS.forEach(key => {
+         const config = STATUS_MAP[key];
+         if (config) {
+             f.status.innerHTML += `<option value="${key}">${config.text}</option>`;
+         }
     });
 
-    // 3. Preenche Datalist de Fornecedores
     const dlForn = document.getElementById('fornecedores-datalist-servico');
     dlForn.innerHTML = '';
     state.fornecedores.forEach(forn => dlForn.innerHTML += `<option value="${forn.nome}">`);
+
+    // 2. Popula Selects da Área de Aquisição (Novos)
+    const selMod = document.getElementById('serv-modalidade');
+    const selGrp = document.getElementById('serv-grupo');
+    
+    selMod.innerHTML = '';
+    state.modalidadesList.forEach(m => selMod.innerHTML += `<option value="${m}">${m}</option>`);
+    selMod.value = 'Serviço'; // Default
+
+    selGrp.innerHTML = '<option value="">-</option>';
+    state.gruposDeCompra.forEach(g => selGrp.innerHTML += `<option value="${g}">${g}</option>`);
+    selGrp.value = 'Serviços'; // Default
 
 
     if (id) {
         // --- EDIÇÃO ---
         const item = state.pedidos.find(p => p.id === id);
         if (item) {
+            // Dados Básicos
             f.unidade.value = item.unidade || '';
-            f.status.value = item.status || 'enviado-aquisicao'; // Preenche Status
+            f.status.value = item.status || 'enviado-aquisicao';
             f.cr.value = item.cr || '';
             f.projeto.value = item.projeto || '';
             f.descricao.value = item.nomeProduto || ''; 
             f.dataPrevisao.value = item.dataPrevisao || '';
             f.fornecedor.value = item.fornecedor || '';
-            f.funcionario.value = item.funcionario || ''; // Preenche Funcionário
+            f.funcionario.value = item.funcionario || '';
+
+            // Dados de Aquisição (Preenchimento)
+            document.getElementById('serv-rn').value = item.numRN || '';
+            document.getElementById('serv-data-rn').value = item.dataAberturaRN || '';
+            document.getElementById('serv-oc').value = item.numOC || '';
+            document.getElementById('serv-valor').value = item.valorTotal || ''; // Valor Total do Serviço
+            
+            document.getElementById('serv-solicitante').value = item.nomeDemandante || ''; 
+            
+            document.getElementById('serv-cod').value = item.codigoProduto || '';
+            document.getElementById('serv-variacao').value = item.variacao || '';
+            
+            if(item.modalidade) selMod.value = item.modalidade;
+            if(item.grupoDeCompra) selGrp.value = item.grupoDeCompra;
 
             if(titleModal) titleModal.textContent = "Editar Serviço";
             if(btnSubmit) btnSubmit.textContent = "Atualizar Serviço";
             
-            // Dispara validação inicial se já tiver dados
+            // Anexos
+            if (item.urlOrcamentos && Array.isArray(item.urlOrcamentos)) {
+                 document.getElementById('lista-anexos-existentes').innerHTML = `${item.urlOrcamentos.length} arquivo(s) já anexado(s).`;
+            } else if (item.urlOrcamento) {
+                 document.getElementById('lista-anexos-existentes').innerHTML = `1 arquivo já anexado.`;
+            }
+
             if(item.fornecedor) window.filterEmployeesBySupplier(); 
             if(item.funcionario) window.validateServiceEmployee();
         }
@@ -2039,14 +2160,13 @@ window.openServicoModal = (id = null) => {
         // --- CRIAÇÃO ---
         if(titleModal) titleModal.textContent = "Nova Solicitação de Serviço";
         if(btnSubmit) btnSubmit.textContent = "Solicitar Serviço";
-        f.status.value = 'enviado-aquisicao'; // Padrão
-        
-        // Se for Solicitante, talvez queira bloquear a mudança de status na criação
-        // if (currentUserProfile.perfil === 'Solicitante') f.status.disabled = true;
+        f.status.value = 'enviado-aquisicao';
+        document.getElementById('serv-solicitante').value = currentUserProfile.nome;
     }
 
     document.getElementById('modal-servico').classList.remove('hidden');
 };
+
 
 
         window.closeServicoModal = () => document.getElementById('modal-servico').classList.add('hidden');
@@ -2114,91 +2234,75 @@ window.renderGestaoNFPage = function() {
     const isGestor = perfil === 'Aquisicoes' || perfil === 'Admin';
     const isRecebedor = perfil === 'Recebedor';
     
-    // Pega o valor do filtro. Se não achar o elemento, assume 'pendente'
+    // Elementos de UI para controlar visibilidade
     const filterEl = document.getElementById('filter-nf-status');
-    const filterType = filterEl ? filterEl.value : 'pendente';
+    const btnRelatorio = document.getElementById('btn-relatorio-mensal');
 
-    // 1. STATUS QUE DEVEM APARECER NA GESTÃO DE NF
-    // Adicionei 'em-cotacao' e 'enviado-aquisicao' se tiverem RN, por segurança
-    const STATUSES_TO_TRACK = [
-        'registrado', 
-        'aguardando-entrega', 
-        'entregue', 
-        'aguardando-lancamento', 
-        'finalizado', 
-        'em-atraso'
-    ];
+    // --- LÓGICA DE PERMISSÃO E FILTRO ---
+    let filterType = 'pendente'; // Valor padrão
 
-    // Filtra pedidos ativos. 
-    // IMPORTANTE: Se o usuário selecionou "Ver Todos", mostramos até o que não está na lista padrão se tiver NF.
+    if (isRecebedor) {
+        // 1. Recebedor: Força o filtro para apenas 'aguardando-entrega'
+        filterType = 'aguardando-entrega';
+
+        // 2. Esconde filtros e botão de relatório
+        if (filterEl) filterEl.classList.add('hidden');
+        if (btnRelatorio) btnRelatorio.classList.add('hidden');
+    } else {
+        // Outros perfis: Usa o valor selecionado no select
+        filterType = filterEl ? filterEl.value : 'pendente';
+
+        // Garante que estão visíveis
+        if (filterEl) filterEl.classList.remove('hidden');
+        if (btnRelatorio) btnRelatorio.classList.remove('hidden');
+    }
+
+    const STATUSES_TO_TRACK = ['registrado', 'aguardando-entrega', 'entregue', 'aguardando-lancamento', 'finalizado', 'em-atraso'];
+
     const pedidosAtivos = state.pedidos.filter(p => {
-        // Se já tem NF, sempre aparece (independente do status)
         if (p.urlNotaFiscal) return true;
-        // Se não tem NF, precisa estar nos status monitorados
         return STATUSES_TO_TRACK.includes(p.status);
     });
 
-    // --- FUNÇÃO AUXILIAR DE COMPLIANCE ---
     const getCompliance = (item) => {
         if (!item.urlNotaFiscal) return 'sem-nf';
         if (!item.dataDoDia || !item.dataEmissao) return 'ok';
-
         const dEnvio = new Date(item.dataDoDia + 'T00:00:00');
         const dEmissao = new Date(item.dataEmissao + 'T00:00:00');
-
-        // 1. Regra de Competência
         const envioMesAno = dEnvio.getFullYear() * 12 + dEnvio.getMonth();
         const emissaoMesAno = dEmissao.getFullYear() * 12 + dEmissao.getMonth();
         if (envioMesAno > emissaoMesAno) return 'fora-competencia';
-
-        // 2. Regra: Fora da NP (Dia 28 a 31)
         const diaEnvio = dEnvio.getDate();
         if (diaEnvio >= 28) return 'fora-np';
-
         return 'ok';
     };
 
-    // --- 2. APLICAR FILTROS ---
     let pedidosFiltrados = [];
-
-    if (filterType === 'pendente') {
-        // Mostra itens que NÃO estão finalizados e NÃO têm NF
-        pedidosFiltrados = pedidosAtivos.filter(p => p.status !== 'finalizado' && !p.urlNotaFiscal);
-    } 
-    else if (filterType === 'aguardando-entrega') {
-        // Mostra explicitamente itens Aguardando Entrega ou Em Atraso
-        pedidosFiltrados = pedidosAtivos.filter(p => p.status === 'aguardando-entrega' || p.status === 'em-atraso');
-    }
-    else if (filterType === 'entregue') {
-        // Mostra itens com NF OU que já passaram da entrega
-        pedidosFiltrados = pedidosAtivos.filter(p => !!p.urlNotaFiscal || ['aguardando-lancamento', 'finalizado', 'entregue'].includes(p.status));
-    }
-    else if (filterType === 'fora-np') {
-        pedidosFiltrados = pedidosAtivos.filter(p => getCompliance(p) === 'fora-np');
-    }
-    else if (filterType === 'fora-competencia') {
-        pedidosFiltrados = pedidosAtivos.filter(p => getCompliance(p) === 'fora-competencia');
-    }
-    else if (filterType === 'com-obs') {
-        pedidosFiltrados = pedidosAtivos.filter(p => p.obsNF && p.obsNF.trim() !== '');
-    }
-    else {
-        // Todos
-        pedidosFiltrados = pedidosAtivos;
-    }
+    
+    // Aplicação dos Filtros baseada no filterType definido acima
+    if (filterType === 'pendente') pedidosFiltrados = pedidosAtivos.filter(p => p.status !== 'finalizado' && !p.urlNotaFiscal);
+    else if (filterType === 'aguardando-entrega') pedidosFiltrados = pedidosAtivos.filter(p => p.status === 'aguardando-entrega' || p.status === 'em-atraso');
+    else if (filterType === 'entregue') pedidosFiltrados = pedidosAtivos.filter(p => !!p.urlNotaFiscal || ['aguardando-lancamento', 'finalizado', 'entregue'].includes(p.status));
+    else if (filterType === 'fora-np') pedidosFiltrados = pedidosAtivos.filter(p => getCompliance(p) === 'fora-np');
+    else if (filterType === 'fora-competencia') pedidosFiltrados = pedidosAtivos.filter(p => getCompliance(p) === 'fora-competencia');
+    else if (filterType === 'com-obs') pedidosFiltrados = pedidosAtivos.filter(p => p.obsNF && p.obsNF.trim() !== '');
+    else pedidosFiltrados = pedidosAtivos;
 
     if (pedidosFiltrados.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="7" class="py-10 text-center text-gray-500">Nenhum pedido encontrado para o filtro: <strong>${filterType}</strong>.</td></tr>`;
+        // Mensagem específica se for recebedor e não tiver nada
+        const msg = isRecebedor 
+            ? "Nenhuma entrega pendente no momento." 
+            : `Nenhum pedido encontrado para o filtro: <strong>${filterType}</strong>.`;
+            
+        tbody.innerHTML = `<tr><td colspan="7" class="py-10 text-center text-gray-500">${msg}</td></tr>`;
         return;
     }
 
-    // --- 3. AGRUPAMENTO (RN) ---
     const grouped = [];
     const rnMap = new Map();
 
     pedidosFiltrados.forEach(p => {
         const compliance = getCompliance(p);
-        
         if (p.numRN) {
             if (!rnMap.has(p.numRN)) {
                 rnMap.set(p.numRN, { 
@@ -2211,6 +2315,8 @@ window.renderGestaoNFPage = function() {
                     fornecedor: p.fornecedor,
                     hasNF: !!p.urlNotaFiscal,
                     nfUrl: p.urlNotaFiscal,
+                    nfUploadedBy: p.nfUploadedBy,
+                    nfUploadedAt: p.nfUploadedAt,
                     fin: p.fin,
                     dataVcto: p.dataVcto,
                     obsNF: p.obsNF, 
@@ -2223,10 +2329,13 @@ window.renderGestaoNFPage = function() {
                 g.total += parseFloat(p.valorTotal||0);
                 if(!!p.urlNotaFiscal) g.hasNF = true;
                 if(p.obsNF) g.obsNF = p.obsNF;
-                // Prioridade de erro no grupo
                 if(compliance !== 'ok' && compliance !== 'sem-nf') g.compliance = compliance;
                 
-                // Se o status do item atual for "aguardando-entrega", atualiza o grupo para refletir isso visualmente
+                if(!g.nfUploadedBy && p.nfUploadedBy) {
+                    g.nfUploadedBy = p.nfUploadedBy;
+                    g.nfUploadedAt = p.nfUploadedAt;
+                }
+                
                 if (p.status === 'aguardando-entrega' || p.status === 'em-atraso') {
                     g.status = p.status;
                 }
@@ -2242,53 +2351,58 @@ window.renderGestaoNFPage = function() {
         }
     });
 
-    // --- 4. RENDERIZAÇÃO ---
     grouped.forEach(item => {
         const tr = document.createElement('tr');
-        
-        // Cor de Fundo (Retorno FIN)
-        let rowClass = item.obsNF 
-            ? "bg-yellow-50 hover:bg-yellow-100 border-b border-yellow-200" 
-            : "hover:bg-gray-50 border-b border-gray-100";
+        let rowClass = item.obsNF ? "bg-yellow-50 hover:bg-yellow-100 border-b border-yellow-200" : "hover:bg-gray-50 border-b border-gray-100";
         tr.className = rowClass;
 
-        // Tags
         let complianceTag = '';
-        if (item.compliance === 'fora-np') {
-            complianceTag = `<span class="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-800 border border-orange-200" title="Enviado entre dia 28-31">Fora NP</span>`;
-        } else if (item.compliance === 'fora-competencia') {
-            complianceTag = `<span class="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800 border border-red-200" title="Enviado no mês seguinte">Fora Comp.</span>`;
-        }
+        if (item.compliance === 'fora-np') complianceTag = `<span class="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-800 border border-orange-200">Fora NP</span>`;
+        else if (item.compliance === 'fora-competencia') complianceTag = `<span class="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800 border border-red-200">Fora Comp.</span>`;
 
         const targetId = item.isGroup ? item.numRN : item.id;
         const nfIcon = item.hasNF ? `<span class="ml-2 text-green-600"><svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg></span>` : '';
 
-        // Display Observação
-        const obsDisplay = item.obsNF 
-            ? `<div class="mt-1 text-[10px] text-red-700 font-bold bg-white border border-red-200 p-1 rounded inline-flex items-center gap-1 max-w-[200px]" title="${item.obsNF}">
-                 <span>↩️ FIN:</span> <span class="truncate">${item.obsNF}</span>
-               </div>` 
-            : '';
+        const obsDisplay = item.obsNF ? `<div class="mt-1 text-[10px] text-red-700 font-bold bg-white border border-red-200 p-1 rounded inline-flex items-center gap-1 max-w-[200px]" title="${item.obsNF}"><span>↩️ FIN:</span> <span class="truncate">${item.obsNF}</span></div>` : '';
 
         let actionBtn = '';
         let vctoDisplay = '';
         
+        let uploadInfo = '';
+        if (item.nfUploadedBy) {
+            let dateStr = '';
+            if (item.nfUploadedAt) {
+                const d = item.nfUploadedAt.toDate ? item.nfUploadedAt.toDate() : new Date(item.nfUploadedAt);
+                dateStr = d.toLocaleDateString('pt-BR', {day:'2-digit', month:'2-digit'}) + ' ' + d.toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'});
+            }
+            uploadInfo = `<div class="mt-1 text-[10px] text-gray-400 leading-tight">Anexado por <strong>${item.nfUploadedBy.split(' ')[0]}</strong><br>${dateStr}</div>`;
+        }
+
         if (isGestor || isRecebedor) {
             if (item.hasNF) {
                 const fin = item.fin || '---';
                 const vcto = item.dataVcto ? item.dataVcto.split('-').reverse().join('/') : '---';
+                
+                // Se for recebedor e já tem NF, mostra apenas info básica, sem botão de editar se já foi entregue
                 vctoDisplay = isGestor 
                     ? `<div class="text-sm font-medium text-gray-900">${fin}</div><div class="text-xs text-gray-500">Vcto: ${vcto}</div>${obsDisplay}` 
-                    : '<div class="text-xs text-gray-400">NF Recebida</div>';
+                    : '<div class="text-xs text-green-600 font-bold">Entregue</div>';
                 
-                actionBtn = `
-                    <div class="flex justify-end gap-2">
-                        <a href="${item.nfUrl}" target="_blank" class="bg-white border border-gray-300 text-gray-700 px-2 py-1 rounded text-xs hover:bg-gray-50 flex items-center gap-1">Ver NF</a>
-                        <button onclick="openNFModal('${targetId}', ${item.isGroup})" class="text-primary-600 hover:text-primary-800"><svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg></button>
-                    </div>`;
+                if (isGestor) {
+                    actionBtn = `
+                        <div class="flex justify-end gap-2">
+                            <a href="${item.nfUrl}" target="_blank" class="bg-white border border-gray-300 text-gray-700 px-2 py-1 rounded text-xs hover:bg-gray-50 flex items-center gap-1">Ver NF</a>
+                            <button onclick="openNFModal('${targetId}', ${item.isGroup})" class="text-primary-600 hover:text-primary-800"><svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg></button>
+                        </div>`;
+                } else {
+                    // Recebedor só vê o link se já enviou
+                    actionBtn = `<a href="${item.nfUrl}" target="_blank" class="text-blue-600 hover:underline text-xs">Ver NF Enviada</a>`;
+                }
+
             } else {
                 vctoDisplay = isGestor ? `<div class="text-xs text-gray-400">Aguardando NF</div>${obsDisplay}` : '';
-                actionBtn = `<button onclick="openNFModal('${targetId}', ${item.isGroup})" class="bg-green-600 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-green-700 shadow-sm flex items-center gap-1 ml-auto">Anexar NF</button>`;
+                // Botão verde para Recebedor anexar
+                actionBtn = `<button onclick="openNFModal('${targetId}', ${item.isGroup})" class="bg-green-600 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-green-700 shadow-sm flex items-center gap-1 ml-auto">Receber & Anexar NF</button>`;
             }
         } else {
             actionBtn = '---'; vctoDisplay = '---';
@@ -2299,12 +2413,9 @@ window.renderGestaoNFPage = function() {
             const ocDisplay = item.numOC ? `OC ${item.numOC}` : `RN ${item.numRN}`;
             const finVctoCell = isGestor ? `<td class="px-4 py-4 text-left">${vctoDisplay}</td>` : '';
             
-            // Botão de Grupo
             let groupActionHtml = actionBtn;
-            if(item.isGroup && isGestor && item.hasNF) {
-                groupActionHtml = `<div class="flex justify-end gap-2"><a href="${item.nfUrl}" target="_blank" class="text-gray-700 px-2 border rounded text-xs bg-white">Ver NF</a><button onclick="openNFModal('${item.numRN}', true)" class="text-primary-600"><svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg></button></div>`;
-            }
-
+            
+            // Layout Agrupado
             tr.innerHTML = `
                 <td class="px-4 py-4 font-bold text-primary-700 flex items-center gap-2">
                     <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" /></svg>
@@ -2313,7 +2424,10 @@ window.renderGestaoNFPage = function() {
                 <td class="px-4 py-4 text-sm text-gray-600">Agrupamento (${item.items.length} itens)</td>
                 <td class="px-4 py-4 text-sm text-gray-900">${item.fornecedor || '-'}</td>
                 <td class="px-4 py-4 text-sm font-bold text-gray-900">R$ ${item.total.toFixed(2)}</td>
-                <td class="px-4 py-4"><span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${st.class}">${st.text}</span></td>
+                <td class="px-4 py-4">
+                    <span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${st.class}">${st.text}</span>
+                    ${uploadInfo} 
+                </td>
                 ${finVctoCell} 
                 <td class="px-4 py-4 text-right flex items-center justify-end gap-2">
                     ${groupActionHtml}
@@ -2321,6 +2435,7 @@ window.renderGestaoNFPage = function() {
                 </td>
             `;
         } else {
+            // Layout Individual
             const st = STATUS_MAP[item.status] || { text: item.status, class: "bg-gray-100" };
             const finVctoCell = isGestor ? `<td class="px-4 py-4 text-left">${vctoDisplay}</td>` : '';
 
@@ -2332,7 +2447,10 @@ window.renderGestaoNFPage = function() {
                 </td>
                 <td class="px-4 py-4 text-sm text-gray-900">${item.fornecedor || '-'}</td>
                 <td class="px-4 py-4 text-sm font-bold text-gray-900">R$ ${parseFloat(item.valorTotal).toFixed(2)}</td>
-                <td class="px-4 py-4"><span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${st.class}">${st.text}</span></td>
+                <td class="px-4 py-4">
+                    <span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${st.class}">${st.text}</span>
+                    ${uploadInfo} 
+                </td>
                 ${finVctoCell}
                 <td class="px-4 py-4 text-right">
                     ${actionBtn}
@@ -2761,16 +2879,12 @@ window.openSupplierAttachments = (id) => {
     const perfil = currentUserProfile.perfil || "Solicitante";
     const isAquisicoes = perfil === 'Aquisicoes' || perfil === 'Admin';
     
-    // --- CORREÇÃO: POPULAR O SELECT DE STATUS DINAMICAMENTE ---
     const statusSelect = document.getElementById('group-status-select');
-    statusSelect.innerHTML = ''; // Limpa opções antigas
+    statusSelect.innerHTML = ''; 
     Object.entries(STATUS_MAP).forEach(([key, config]) => {
-        // Adiciona todas as opções do mapa global
         statusSelect.innerHTML += `<option value="${key}">${config.text}</option>`;
     });
-    // Tenta selecionar o status atual do grupo (baseado no primeiro item ou no status majoritário)
     statusSelect.value = first.status;
-    // -----------------------------------------------------------
 
     // --- UI FIELDS ---
     const rnInput = document.getElementById('group-rn-edit');
@@ -2782,12 +2896,16 @@ window.openSupplierAttachments = (id) => {
     const modalidadeSelect = document.getElementById('group-modalidade-select');
     const grupoSelect = document.getElementById('group-grupo-select');
 
+    // Botões (agora buscamos ambos, pois o Save pode estar escondido inicialmente)
     const btnSave = document.getElementById('btn-save-rn-data');
+    const btnFichaCot = document.getElementById('btn-group-ficha-cotacao');
+
     const batchContainer = document.getElementById('group-batch-status-container');
     const tbody = document.getElementById('group-items-body');
     
     tbody.innerHTML = '';
     
+    // --- PREENCHIMENTO DE DADOS ---
     rnInput.value = first.numRN || '';
     rnInput.dataset.original = first.numRN || '';
     rnInput.disabled = !isAquisicoes; 
@@ -2796,8 +2914,8 @@ window.openSupplierAttachments = (id) => {
     
     if(first.dataAberturaRN) {
          try {
-              const d = first.dataAberturaRN.toDate ? first.dataAberturaRN.toDate() : new Date(first.dataAberturaRN);
-              if(!isNaN(d)) dateInput.value = d.toISOString().split('T')[0];
+             const d = first.dataAberturaRN.toDate ? first.dataAberturaRN.toDate() : new Date(first.dataAberturaRN);
+             if(!isNaN(d)) dateInput.value = d.toISOString().split('T')[0];
          } catch(e){ dateInput.value = ''; }
     } else dateInput.value = '';
     dateInput.disabled = !isAquisicoes;
@@ -2805,39 +2923,82 @@ window.openSupplierAttachments = (id) => {
     previsaoInput.value = first.dataPrevisao || '';
     previsaoInput.disabled = !isAquisicoes;
     
+    // --- LÓGICA DE PERMISSÃO (VISIBILIDADE) ---
     if (isAquisicoes) {
         fornecedorInput.value = first.fornecedor || '';
         segmentoInput.value = first.segmento || '';
 
         modalidadeSelect.innerHTML = state.modalidadesList.map(m => `<option value="${m}" ${m === first.modalidade ? 'selected' : ''}>${m}</option>`).join('');
-        
         grupoSelect.innerHTML = state.gruposDeCompra.map(g => `<option value="${g}" ${g === first.grupoDeCompra ? 'selected' : ''}>${g}</option>`).join('');
 
+        // Mostra botão de Salvar
         if(btnSave) {
             btnSave.classList.remove('hidden');
             btnSave.textContent = "Salvar Dados de Aquisição";
         }
         if(batchContainer) batchContainer.classList.remove('hidden');
 
-        const btnFichaCot = document.getElementById('btn-group-ficha-cotacao');
+        // Configura botão de Ficha
         if(btnFichaCot) {
              const targetForFicha = first.numRN || items.map(i => i.id).join(',');
              const isGroupFicha = !!first.numRN;
-             
              btnFichaCot.onclick = () => window.openCotacaoModal(targetForFicha, isGroupFicha);
              btnFichaCot.classList.remove('hidden');
+        }
+
+        // --- CORREÇÃO DO LAYOUT DE UPLOAD (OCUPA LARGURA TOTAL AGORA) ---
+        let fileInputDiv = document.getElementById('group-file-upload-container');
+        if (fileInputDiv) fileInputDiv.remove(); // Remove para recriar limpo
+
+        const editContainer = document.querySelector('#modal-group .grid.grid-cols-4');
+        if (editContainer) {
+             const div = document.createElement('div');
+             div.id = 'group-file-upload-container';
+             // MUDANÇA: col-span-4 para ocupar a linha toda, já que o botão saiu
+             div.className = 'col-span-4 mt-2 border-t pt-2 border-gray-200'; 
+             div.innerHTML = `
+                <label class="block text-[10px] font-bold text-gray-500 uppercase mb-1">Adicionar Arquivos ao Grupo (Múltiplos)</label>
+                <input type="file" multiple id="group-files-edit" class="block w-full text-xs text-gray-500 file:mr-2 file:py-1 file:px-3 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
+             `;
+             editContainer.appendChild(div);
+        }
+
+        // --- MUDANÇA: MOVER O BOTÃO SALVAR PARA O RODAPÉ (DOM MANIPULATION) ---
+        // Se o botão de salvar existir, movemos ele para o container do rodapé
+        const footerContainer = document.querySelector('#modal-group .flex.justify-end.pt-4');
+        if (footerContainer && btnSave) {
+            // Adiciona gap se não tiver
+            footerContainer.classList.add('gap-2');
+            // Move o botão salvar para ser o primeiro filho do footer (antes do gerar ficha) ou append
+            // Vamos fazer prepend para ficar [Salvar] [Gerar Ficha] ou append para [Gerar Ficha] [Salvar]
+            // O usuário pediu "do lado", geralmente salvar fica na ponta direita.
+            footerContainer.appendChild(btnSave); 
         }
 
     } else {
          if(btnSave) btnSave.classList.add('hidden');
          if(batchContainer) batchContainer.classList.add('hidden');
-         const btnFichaCot = document.getElementById('btn-group-ficha-cotacao');
          if(btnFichaCot) btnFichaCot.classList.add('hidden');
+         
+         const fileDiv = document.getElementById('group-file-upload-container');
+         if(fileDiv) fileDiv.classList.add('hidden');
     }
     
     let total = 0;
     const unitValueEditable = isAquisicoes ? '' : 'readonly disabled';
     
+    const thead = document.querySelector('#modal-group thead tr');
+    if (thead) {
+        thead.innerHTML = `
+            <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase w-16">Cód.</th>
+            <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Item / Unidade / CR</th>
+            <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Projeto</th>
+            <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase w-24">Vl. Unitário</th>
+            <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase w-24">Vl. Total</th>
+            <th class="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase w-32">Ações</th>
+        `;
+    }
+
     items.forEach(p => {
         total += parseFloat(p.valorTotal||0);
         
@@ -2856,6 +3017,9 @@ window.openSupplierAttachments = (id) => {
         tr.dataset.totalvalue = p.valorTotal;
 
         tr.innerHTML = `
+            <td class="py-2 px-4 text-xs text-gray-500 font-mono">
+                ${p.codigoProduto || '-'}
+            </td>
             <td class="py-2 px-4 text-sm text-gray-700">
                 <div class="font-medium">${p.nomeProduto}</div>
                 <div class="text-xs text-gray-500">${p.unidade} | CR: ${p.cr || '-'}</div>
@@ -2879,6 +3043,9 @@ window.openSupplierAttachments = (id) => {
     document.getElementById('group-total-display').textContent = `R$ ${total.toFixed(2)}`;
     document.getElementById('modal-group').classList.remove('hidden');
 };
+
+
+
         
         window.closeGroupModal = () => document.getElementById('modal-group').classList.add('hidden');
 
@@ -2983,90 +3150,78 @@ window.openSupplierAttachments = (id) => {
 
         // NOVA FUNÇÃO: SALVAR DADOS DO GRUPO (AGRUPAMENTO E DADOS SUPLEMENTARES)
         window.updateGroupData = async () => {
-            const btn = document.getElementById('btn-save-rn-data');
-            btn.disabled = true; btn.textContent = "...";
-            
-            const newRN = document.getElementById('group-rn-edit').value;
-            const newDate = document.getElementById('group-date-edit').value;
-            const newOC = document.getElementById('group-oc-edit').value;
-            const newPrevisao = document.getElementById('group-previsao-edit').value; // NOVO
-            const newSegmento = document.getElementById('group-segmento-edit').value; // NOVO
+    const btn = document.getElementById('btn-save-rn-data');
+    btn.disabled = true; btn.textContent = "...";
+    
+    const newRN = document.getElementById('group-rn-edit').value;
+    const newDate = document.getElementById('group-date-edit').value;
+    const newOC = document.getElementById('group-oc-edit').value;
+    const newPrevisao = document.getElementById('group-previsao-edit').value; 
+    const newSegmento = document.getElementById('group-segmento-edit').value; 
 
-            // Dados suplementares
-            const newModalidade = document.getElementById('group-modalidade-select').value;
-            const newGrupo = document.getElementById('group-grupo-select').value;
-            const newFornecedor = document.getElementById('group-fornecedor-edit').value;
+    // Dados suplementares
+    const newModalidade = document.getElementById('group-modalidade-select').value;
+    const newGrupo = document.getElementById('group-grupo-select').value;
+    const newFornecedor = document.getElementById('group-fornecedor-edit').value;
 
+    // Arquivos (Múltiplos)
+    const fileInput = document.getElementById('group-files-edit');
+    const files = fileInput ? fileInput.files : [];
 
-            if(!newFornecedor) return showNotification("O campo Fornecedor é obrigatório.", "error");
+    if(!newFornecedor) return showNotification("O campo Fornecedor é obrigatório.", "error");
 
-            try {
-                const batch = writeBatch(db);
-
-                // 1. Coleta a lista de itens a serem atualizados (todos na tabela)
-                document.querySelectorAll('.group-item-row').forEach(row => {
-                     // 2. Coleta os valores editados do item
-                     const updatedData = {
-                          valorUnitario: parseFloat(row.dataset.unitvalue),
-                          valorTotal: parseFloat(row.dataset.totalvalue),
-                          // Dados de Aquisição
-                          numRN: newRN || deleteField(),
-                          dataAberturaRN: newDate || deleteField(),
-                          numOC: newOC || deleteField(),
-                          dataPrevisao: newPrevisao || deleteField(), // NOVO
-                          segmento: newSegmento || deleteField(),     // NOVO
-                          // Dados Suplementares
-                          modalidade: newModalidade,
-                          grupoDeCompra: newGrupo,
-                          fornecedor: newFornecedor,
-                          status: 'em-cotacao' // Força status de cotação ao salvar dados principais
-                     };
-                     
-                     batch.update(doc(db, `artifacts/${appId}/public/data/pedidos`, row.dataset.id), updatedData);
-                });
-                
-                await batch.commit();
-                showNotification("Dados do Agrupamento atualizados!", "success");
-                window.closeGroupModal();
-            } catch(e) { 
-                console.error(e); 
-                showNotification("Erro ao salvar dados do agrupamento. Verifique se os valores unitários são numéricos.", "error"); 
-            } finally {
-                 btn.disabled = false; btn.textContent = "Salvar Dados de Aquisição";
+    try {
+        // 1. Upload de Arquivos (Se houver)
+        let uploadedUrls = [];
+        if (files.length > 0) {
+            for(let i=0; i < files.length; i++) {
+                const file = files[i];
+                const r = ref(storage, `artifacts/${appId}/bulk_docs/${Date.now()}_${file.name}`);
+                await uploadBytes(r, file);
+                const url = await getDownloadURL(r);
+                uploadedUrls.push(url);
             }
-        };
+        }
 
-        window.updateGroupStatus = async () => {
-            const sel = document.getElementById('group-status-select');
-            const rnOrId = sel.dataset.rn;
-            const st = sel.value;
-            const btn = document.getElementById('btn-update-status');
-            
-            btn.disabled = true; btn.textContent = "...";
-            
-            try {
-                let itemsToUpdate = [];
+        const batch = writeBatch(db);
 
-                // 1. Coleta os itens na tela
-                document.querySelectorAll('.group-item-row').forEach(row => {
-                    itemsToUpdate.push(row.dataset.id);
-                });
+        // 2. Coleta a lista de itens a serem atualizados (todos na tabela)
+        document.querySelectorAll('.group-item-row').forEach(row => {
+              const updatedData = {
+                  valorUnitario: parseFloat(row.dataset.unitvalue),
+                  valorTotal: parseFloat(row.dataset.totalvalue),
+                  // Dados de Aquisição
+                  numRN: newRN || deleteField(),
+                  dataAberturaRN: newDate || deleteField(),
+                  numOC: newOC || deleteField(),
+                  dataPrevisao: newPrevisao || deleteField(), 
+                  segmento: newSegmento || deleteField(),     
+                  // Dados Suplementares
+                  modalidade: newModalidade,
+                  grupoDeCompra: newGrupo,
+                  fornecedor: newFornecedor,
+                  status: 'em-cotacao' 
+              };
 
-                if (itemsToUpdate.length === 0) {
-                     return showNotification("Nenhum item para atualizar.", "error");
-                }
-                
-                const batch = writeBatch(db);
-                itemsToUpdate.forEach(id => {
-                    batch.update(doc(db, `artifacts/${appId}/public/data/pedidos`, id), { status: st });
-                });
-
-                await batch.commit();
-                showNotification("Status atualizado em lote!", "success");
-                window.closeGroupModal();
-            } catch(e) { console.error(e); showNotification("Erro ao atualizar.", "error"); }
-            finally { btn.disabled = false; btn.textContent = "Atualizar"; }
-        };
+              // Se houve upload, adiciona ao array existente usando arrayUnion
+              if (uploadedUrls.length > 0) {
+                  // arrayUnion garante que adicionamos sem duplicar e sem apagar o que já estava
+                  updatedData.urlBulkAnexos = arrayUnion(...uploadedUrls);
+              }
+              
+              batch.update(doc(db, `artifacts/${appId}/public/data/pedidos`, row.dataset.id), updatedData);
+        });
+        
+        await batch.commit();
+        showNotification("Dados do Agrupamento atualizados com sucesso!", "success");
+        window.closeGroupModal();
+    } catch(e) { 
+        console.error(e); 
+        showNotification("Erro ao salvar: " + e.message, "error"); 
+    } finally {
+         btn.disabled = false; btn.textContent = "Salvar Dados de Aquisição";
+    }
+};
 
         // --- ADMIN IMPLEMENTATION ---
         function renderAdminPage() {
@@ -3478,9 +3633,16 @@ async function fetchFuncionarios() {
     g.innerHTML = '<option value="">-</option>';
     state.gruposDeCompra.forEach(x => g.innerHTML += `<option value="${x}">${x}</option>`);
     
+    // --- STATUS DO MODAL (USANDO A NOVA LISTA DE PRODUTOS) ---
     const s = f.status;
     s.innerHTML = '';
-    Object.entries(STATUS_MAP).filter(([k]) => k !== 'a-inserir-rn').forEach(([k, v]) => s.innerHTML += `<option value="${k}">${v.text}</option>`);
+    PRODUCT_STATUS_OPTIONS.forEach(key => {
+        const config = STATUS_MAP[key];
+        if (config) {
+            s.innerHTML += `<option value="${key}">${config.text}</option>`;
+        }
+    });
+    // --------------------------------------------------------
 
     // Filtro de unidade padrão
     const filterU = document.getElementById('filter-unidade')?.value;
@@ -3498,7 +3660,6 @@ async function fetchFuncionarios() {
     // Se for Admin ou Aquisições, mostra a área e LIBERA o campo RN
     if (currentUserProfile.perfil !== 'Solicitante') {
         adminArea.classList.remove('hidden');
-        // AQUI ESTÁ A CORREÇÃO: Removemos o bloqueio. Agora você pode digitar sempre.
         rnInput.disabled = false; 
         rnInput.classList.remove('bg-gray-100', 'cursor-not-allowed');
         rnInput.placeholder = "Digite a RN (Opcional)";
@@ -3527,7 +3688,9 @@ async function fetchFuncionarios() {
             if (p.grupoDeCompra) f.grupoDeCompra.value = p.grupoDeCompra;
             f.numRN.value = p.numRN || '';
             f.numOC.value = p.numOC || '';
+            
             f.status.value = p.status;
+
             if (p.dataAberturaRN) f.dataAberturaRN.value = p.dataAberturaRN;
             if (p.dataPrevisao) f.dataPrevisao.value = p.dataPrevisao;
             if (p.fornecedor) f.fornecedor.value = p.fornecedor;
@@ -3544,7 +3707,7 @@ async function fetchFuncionarios() {
             const anexosBtn = document.getElementById('btn-ver-anexos');
             const anexoCount = p.urlAnexos?.length || 0;
             anexosBtn.textContent = `Ver Anexos (${anexoCount})`;
-            // ... (restante da lógica de anexos igual ao original)
+            
              anexosBtn.onclick = () => {
                  const currentItem = state.pedidos.find(x => x.id === id);
                  if (currentItem && currentItem.urlAnexos && currentItem.urlAnexos.length > 0) {
@@ -4320,6 +4483,7 @@ window.toggleSupplierDetails = (id) => {
 };
 
              // NOVO: Save Serviço Form (Atualizado para Edição)
+// NOVO: Save Serviço Form (Atualizado para Múltiplos Arquivos e Controle de Perfil)
 document.getElementById('form-servico').addEventListener('submit', async e => {
     e.preventDefault();
     const f = e.target;
@@ -4329,37 +4493,78 @@ document.getElementById('form-servico').addEventListener('submit', async e => {
     btn.disabled = true; btn.textContent = "Processando...";
     
     try {
+        // Dados Básicos
         const data = {
-            modalidade: 'Serviço',
             unidade: f.unidade.value,
-            status: f.status.value, // <--- SALVA O STATUS SELECIONADO
+            status: f.status.value,
             cr: f.cr.value,
             projeto: f.projeto.value,
-            nomeProduto: f.descricao.value, 
+            nomeProduto: f.descricao.value, // Descrição vai no nomeProduto
             dataPrevisao: f.dataPrevisao.value,
             fornecedor: f.fornecedor.value,
-            funcionario: f.funcionario.value // <--- SALVA O FUNCIONÁRIO
+            funcionario: f.funcionario.value
         };
         
+        // Dados de Aquisição (Lê dos novos inputs)
+        // Só salva/atualiza se o usuário for gestor, ou se os campos existirem e tiverem valor
+        if (currentUserProfile.perfil !== 'Solicitante') {
+            data.numRN = document.getElementById('serv-rn').value;
+            data.dataAberturaRN = document.getElementById('serv-data-rn').value;
+            data.numOC = document.getElementById('serv-oc').value;
+            data.valorTotal = parseFloat(document.getElementById('serv-valor').value) || 0;
+            data.nomeDemandante = document.getElementById('serv-solicitante').value; // Aquisição pode editar
+            data.codigoProduto = document.getElementById('serv-cod').value;
+            data.variacao = document.getElementById('serv-variacao').value;
+            data.modalidade = document.getElementById('serv-modalidade').value;
+            data.grupoDeCompra = document.getElementById('serv-grupo').value;
+        }
+
         if (!docId) {
-            // Dados fixos na criação
-            data.nomeDemandante = currentUserProfile.nome;
+            // Se for criação e for Solicitante, garante dados padrão
+            if(currentUserProfile.perfil === 'Solicitante') {
+                data.nomeDemandante = currentUserProfile.nome;
+                data.modalidade = 'Serviço';
+                data.grupoDeCompra = 'Serviços';
+                data.valorTotal = 0;
+                data.status = 'enviado-aquisicao';
+            }
+            
             data.solicitanteId = currentUser.uid;
             data.solicitanteEmail = currentUser.email;
             data.solicitanteNome = currentUserProfile.nome;
             data.dataSolicitacao = Timestamp.now();
-            data.grupoDeCompra = 'Serviços';
             data.quantidade = 1; 
-            data.valorUnitario = 0; 
-            data.valorTotal = 0;
-            // Se o usuário não tiver permissão para mudar status na criação, força o padrão:
-            if (currentUserProfile.perfil === 'Solicitante') data.status = 'enviado-aquisicao';
+            data.valorUnitario = data.valorTotal; // Unitário = Total em serviços únicos
+        } else {
+             // Se for edição, atualiza valor unitário se o total mudou
+             if(data.valorTotal) data.valorUnitario = data.valorTotal;
         }
         
-        if(f.fileOrc.files[0]) {
-            const r = ref(storage, `artifacts/${appId}/docs/${Date.now()}_orc_servico`);
-            await uploadBytes(r, f.fileOrc.files[0]); 
-            data.urlOrcamento = await getDownloadURL(r);
+        // Uploads
+        let uploadedUrls = [];
+        const files = f.fileOrc.files;
+        if (files.length > 0) {
+            for(let i=0; i < files.length; i++) {
+                const file = files[i];
+                const r = ref(storage, `artifacts/${appId}/docs/${Date.now()}_orc_servico_${i}_${file.name}`);
+                await uploadBytes(r, file); 
+                const url = await getDownloadURL(r);
+                uploadedUrls.push(url);
+            }
+        }
+
+        let existingUrls = [];
+        if (docId) {
+            const oldItem = state.pedidos.find(p => p.id === docId);
+            if (oldItem) {
+                if (oldItem.urlOrcamentos && Array.isArray(oldItem.urlOrcamentos)) existingUrls = oldItem.urlOrcamentos;
+                else if (oldItem.urlOrcamento) existingUrls = [oldItem.urlOrcamento];
+            }
+        }
+        const finalUrls = [...existingUrls, ...uploadedUrls];
+        if (finalUrls.length > 0) {
+            data.urlOrcamentos = finalUrls;
+            data.urlOrcamento = finalUrls[0];
         }
         
         if (docId) {
@@ -4379,6 +4584,32 @@ document.getElementById('form-servico').addEventListener('submit', async e => {
         btn.textContent = docId ? "Atualizar Serviço" : "Solicitar Serviço"; 
     }
 });
+
+
+// --- FUNÇÃO PARA ABRIR ANEXOS DO SERVIÇO (MÚLTIPLOS) ---
+window.openServiceAttachments = (id) => {
+    const item = state.pedidos.find(p => p.id === id);
+    if (!item) return;
+
+    let urls = [];
+
+    // 1. Verifica se existe o array novo de múltiplos arquivos
+    if (item.urlOrcamentos && Array.isArray(item.urlOrcamentos) && item.urlOrcamentos.length > 0) {
+        urls = item.urlOrcamentos;
+    } 
+    // 2. Fallback: Verifica se existe o campo antigo (string única) e adiciona se não estiver duplicado
+    else if (item.urlOrcamento) {
+        urls = [item.urlOrcamento];
+    }
+
+    if (urls.length > 0) {
+        // Usa a função de modal de anexos que já existe no seu código
+        // Passamos 'null' no segundo parametro pois não precisamos esconder/reabrir nenhum modal pai aqui
+        window.openAttachmentsModal(urls, null);
+    } else {
+        showNotification("Nenhum arquivo encontrado.", "error");
+    }
+};
 
 
              
@@ -5002,7 +5233,7 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
       <div id="gestao-nf" class="page-content hidden w-full">
     <div class="flex justify-between items-center mb-6">
         <h2 class="text-2xl font-bold text-gray-900">Gestão de Nota Fiscal</h2>
-        <button onclick="openRelatorioMensal()" class="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 focus:outline-none">
+        <button id="btn-relatorio-mensal" onclick="openRelatorioMensal()" class="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 focus:outline-none">
             <svg class="mr-2 -ml-1 h-5 w-5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
             </svg>
@@ -5455,7 +5686,7 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
     <div class="fixed inset-0 z-10 overflow-y-auto">
         <div class="flex min-h-full items-center justify-center p-4 text-center sm:p-0">
             
-            <div class="relative transform overflow-hidden rounded-lg bg-white text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-2xl">
+            <div class="relative transform overflow-hidden rounded-lg bg-white text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-3xl">
                 
                 <form id="form-servico" class="flex flex-col">
                     
@@ -5465,51 +5696,99 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
                             Solicitação de Serviço
                         </h3>
                         
-                        <div class="grid grid-cols-2 gap-4">
-                            <div>
+                        <div class="grid grid-cols-12 gap-4">
+                            <div class="col-span-6">
                                 <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Unidade</label>
                                 <select name="unidade" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border"></select>
                             </div>
-                            <div>
+                            <div class="col-span-6">
                                 <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Status</label>
                                 <select name="status" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border bg-white"></select>
                             </div>
 
-                            <div>
+                            <div class="col-span-6">
                                 <label class="block text-xs font-medium text-gray-500 uppercase mb-1">CR</label>
                                 <input name="cr" required class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border">
                             </div>
-                            <div>
+                            <div class="col-span-6">
                                 <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Projeto</label>
                                 <input name="projeto" required class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border">
                             </div>
 
-                            <div class="col-span-2">
+                            <div class="col-span-12">
                                 <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Descrição do Serviço</label>
                                 <textarea name="descricao" required rows="2" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border"></textarea>
                             </div>
 
-                            <div>
+                            <div class="col-span-6">
                                 <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Data Prevista Execução</label>
                                 <input name="dataPrevisao" type="date" required class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border" onchange="validateServiceEmployee()">
                             </div>
-                            <div>
-                                <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Fornecedor</label>
+
+                             <div id="div-servico-fornecedor" class="col-span-6">
+                                <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Fornecedor Sugerido</label>
                                 <input list="fornecedores-datalist-servico" name="fornecedor" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border" placeholder="Selecione..." onchange="filterEmployeesBySupplier(); validateServiceEmployee()" oninput="filterEmployeesBySupplier()">
                                 <datalist id="fornecedores-datalist-servico"></datalist>
                             </div>
 
-                            <div class="col-span-2 bg-gray-50 p-3 rounded border border-gray-200">
+                            <div id="div-servico-funcionario" class="col-span-12 bg-gray-50 p-3 rounded border border-gray-200">
                                 <label class="block text-xs font-bold text-gray-700 uppercase mb-1">Funcionário Executante (Obrigatório FAP/ASO)</label>
                                 <input list="datalist-funcionarios-servico" name="funcionario" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border mb-2" placeholder="Digite o nome do funcionário..." oninput="validateServiceEmployee()" autocomplete="off">
                                 <datalist id="datalist-funcionarios-servico"></datalist>
-                                
                                 <div id="service-employee-alert" class="text-xs hidden"></div>
                             </div>
+                            
+                            <div class="col-span-12">
+                                <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Anexar Orçamento / Documentos</label>
+                                <input type="file" name="fileOrc" multiple class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100">
+                                <div id="lista-anexos-existentes" class="mt-2 text-xs text-blue-600"></div>
+                            </div>
+                        </div>
 
-                            <div class="col-span-2">
-                                <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Anexar Orçamento</label>
-                                <input type="file" name="fileOrc" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100">
+                        <div id="area-aquisicao-servico" class="hidden mt-6 pt-4 border-t border-gray-200 bg-blue-50 -mx-6 px-6 pb-2">
+                            <h4 class="text-xs font-bold text-blue-800 uppercase tracking-wider mb-3 flex items-center gap-2">
+                                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                                Dados de Processamento (Aquisição)
+                            </h4>
+                            <div class="grid grid-cols-12 gap-4">
+                                <div class="col-span-3">
+                                    <label class="block text-[10px] font-bold text-blue-700 uppercase mb-1">Nº RN</label>
+                                    <input id="serv-rn" class="block w-full rounded border-blue-300 shadow-sm sm:text-xs p-2">
+                                </div>
+                                <div class="col-span-3">
+                                    <label class="block text-[10px] font-bold text-blue-700 uppercase mb-1">Data RN</label>
+                                    <input type="date" id="serv-data-rn" class="block w-full rounded border-blue-300 shadow-sm sm:text-xs p-2">
+                                </div>
+                                <div class="col-span-3">
+                                    <label class="block text-[10px] font-bold text-blue-700 uppercase mb-1">Nº OC</label>
+                                    <input id="serv-oc" class="block w-full rounded border-blue-300 shadow-sm sm:text-xs p-2">
+                                </div>
+                                <div class="col-span-3">
+                                    <label class="block text-[10px] font-bold text-blue-700 uppercase mb-1">Valor (R$)</label>
+                                    <input type="number" step="0.01" id="serv-valor" class="block w-full rounded border-blue-300 shadow-sm sm:text-xs p-2">
+                                </div>
+
+                                <div class="col-span-6">
+                                    <label class="block text-[10px] font-bold text-blue-700 uppercase mb-1">Nome Solicitante</label>
+                                    <input id="serv-solicitante" class="block w-full rounded border-blue-300 shadow-sm sm:text-xs p-2 bg-white">
+                                </div>
+                                <div class="col-span-3">
+                                    <label class="block text-[10px] font-bold text-blue-700 uppercase mb-1">Cód. Produto</label>
+                                    <input id="serv-cod" class="block w-full rounded border-blue-300 shadow-sm sm:text-xs p-2">
+                                </div>
+                                <div class="col-span-3">
+                                    <label class="block text-[10px] font-bold text-blue-700 uppercase mb-1">Variação</label>
+                                    <input id="serv-variacao" class="block w-full rounded border-blue-300 shadow-sm sm:text-xs p-2">
+                                </div>
+
+                                <div class="col-span-6">
+                                    <label class="block text-[10px] font-bold text-blue-700 uppercase mb-1">Modalidade</label>
+                                    <select id="serv-modalidade" class="block w-full rounded border-blue-300 shadow-sm sm:text-xs p-2 bg-white"></select>
+                                </div>
+                                <div class="col-span-6">
+                                    <label class="block text-[10px] font-bold text-blue-700 uppercase mb-1">Grupo de Compra</label>
+                                    <select id="serv-grupo" class="block w-full rounded border-blue-300 shadow-sm sm:text-xs p-2 bg-white"></select>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -5519,7 +5798,7 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
                         <button type="button" onclick="closeServicoModal()" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">Cancelar</button>
                     </div>
                 </form>
-                </div>
+            </div>
         </div>
     </div>
 </div>
