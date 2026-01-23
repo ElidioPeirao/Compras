@@ -147,33 +147,35 @@ window.renderContractItemsList = () => {
     }
 };
         
-        const state = {
-            pedidos: [], 
-            fornecedores: [], 
-            funcionarios: [],
-            unidadesList: [], // Lista completa de objetos de unidade
-            unidades: [], // Apenas os nomes para compatibilidade (será preenchido dinamicamente)
-            gruposDeCompra: [
-                "Alimentos", "Serviços", "Mobiliário", "Equip. materiais médicos e odontológicos",
-                "Materiais de Expediente", "EPI", "Limpeza", 
-                "Material Didatico", "Manutenção", // NOVOS
-                "Outros"
-                // REMOVIDOS: Fundo Rotativo, Aquisição CD, Contrato, Compra Regional
-            ],
-            modalidadesList: [
-                "Produto", "Serviço", "Contrato", "Compra Regional", "Requisição CD", "Fundo Rotativo", "Chave Eventual", "Sede"
-            ],
-            usuarios: [], 
-            contratos: [],
-            produtosBuscados: [], 
-            linksExternos: [], 
-            selectedPedidos: [], 
-            filtros: { unidade: "", modalidade: "", status: "", search: "", fornecedor: "" }, // NOVO: Adicionado campo de busca
-            isSidebarOpen: true,
-            sortConfig: { field: 'dataSolicitacao', direction: 'desc' }// NOVO: Estado da barra lateral
-            
-        
-        };
+// Substitua ou atualize seu objeto 'state' para incluir 'selectedNFItems'
+const state = {
+    pedidos: [], 
+    fornecedores: [], 
+    funcionarios: [],
+    unidadesList: [], 
+    unidades: [], 
+    gruposDeCompra: [
+        "Alimentos", "Serviços", "Mobiliário", "Equip. materiais médicos e odontológicos",
+        "Materiais de Expediente", "EPI", "Limpeza", 
+        "Material Didatico", "Manutenção", 
+        "Outros"
+    ],
+    modalidadesList: [
+        "Produto", "Serviço", "Contrato", "Compra Regional", "Requisição CD", "Fundo Rotativo", "Chave Eventual", "Sede"
+    ],
+    usuarios: [], 
+    contratos: [],
+    contratosRegistros: [], // Adicione se não tiver
+    produtosBuscados: [], 
+    linksExternos: [], 
+    selectedPedidos: [], 
+    selectedNFItems: [], // <--- NOVO: LISTA PARA LOTE DE NF
+    filtros: { unidade: "", modalidade: "", status: "", search: "", fornecedor: "" },
+    isSidebarOpen: true,
+    sortConfig: { field: 'dataSolicitacao', direction: 'desc' }
+};
+
+
         let unsubscribeContratos = null; // NOVO
         // Função Fetch (Adicione junto com as outras fetchs)
 async function fetchContratos() {
@@ -2371,270 +2373,232 @@ window.renderRelatorioGastosContent = () => {
 
 
         // --- GESTÃO DE NF ---
+// --- GESTÃO DE NF (ATUALIZADA PARA INCLUIR CONTRATOS PROCESSADOS) ---
+// --- GESTÃO DE NF (ATUALIZADA: FILTRO CONTRATOS + DEFAULT TODOS) ---
+// --- BLOCÃO DE FUNÇÕES DA GESTÃO DE NF (Copie tudo isso) ---
+
+// 1. Função de Renderização Principal (Substitui a anterior)
 window.renderGestaoNFPage = function() {
     const tbody = document.getElementById('tabela-nf-body');
     if (!tbody) return;
     tbody.innerHTML = '';
 
+    // Atualiza barra de lote
+    if(window.updateNFBulkBar) window.updateNFBulkBar();
+
     const perfil = currentUserProfile.perfil || "Solicitante";
     const isGestor = perfil === 'Aquisicoes' || perfil === 'Admin';
     const isRecebedor = perfil === 'Recebedor';
     
-    // Pega o valor do filtro. Se não achar o elemento, assume 'pendente'
+    // Filtros
     const filterEl = document.getElementById('filter-nf-status');
-    const filterType = filterEl ? filterEl.value : 'pendente';
+    const filterType = filterEl ? filterEl.value : 'todos';
 
-    // 1. STATUS QUE DEVEM APARECER NA GESTÃO DE NF
-    const STATUSES_TO_TRACK = [
-        'registrado', 
-        'aguardando-entrega', 
-        'entregue', 
-        'aguardando-lancamento', 
-        'finalizado', 
-        'em-atraso'
-    ];
+    const STATUSES_TO_TRACK = ['registrado', 'aguardando-entrega', 'entregue', 'aguardando-lancamento', 'finalizado', 'em-atraso'];
 
-    // Filtra pedidos ativos. 
+    // Lista de Pedidos
     const pedidosAtivos = state.pedidos.filter(p => {
-        // Se já tem NF, sempre aparece
         if (p.urlNotaFiscal) return true;
-        // Se não tem NF, precisa estar nos status monitorados
         return STATUSES_TO_TRACK.includes(p.status);
-    });
+    }).map(p => ({
+        ...p, tipoItem: 'Pedido', referencia: p.numOC ? `OC ${p.numOC}` : (p.numRN ? `RN ${p.numRN}` : '---'),
+        descricaoItem: p.nomeProduto, valorItem: parseFloat(p.valorTotal || 0), dataRef: p.dataEmissao || p.dataDoDia
+    }));
 
-    // --- FUNÇÃO AUXILIAR DE COMPLIANCE ---
+    // Lista de Contratos Processados
+    const contratosProcessados = state.contratos
+        .filter(c => c.tipo === 'Contrato' && c.status === 'Processado')
+        .map(c => ({
+            ...c, tipoItem: 'Contrato', status: 'finalizado', referencia: c.contratoBase ? `CTR ${c.contratoBase}` : 'Sem Base',
+            descricaoItem: c.descricaoContrato || c.descricao || 'Processamento Contrato', fornecedor: c.fornecedorNome,
+            valorItem: parseFloat(c.valorTotalNota || 0), urlNotaFiscal: c.urlArquivo, dataRef: c.dataRN, obsNF: c.observacaoGeral || c.apontamento,
+            dataDoDia: c.dataRN, dataEmissao: c.dataRN
+        }));
+
+    const unifiedList = [...pedidosAtivos, ...contratosProcessados];
+
+    // Compliance Check
     const getCompliance = (item) => {
         if (!item.urlNotaFiscal) return 'sem-nf';
         if (!item.dataDoDia || !item.dataEmissao) return 'ok';
-
         const dEnvio = new Date(item.dataDoDia + 'T00:00:00');
         const dEmissao = new Date(item.dataEmissao + 'T00:00:00');
-
-        // 1. Regra de Competência
         const envioMesAno = dEnvio.getFullYear() * 12 + dEnvio.getMonth();
         const emissaoMesAno = dEmissao.getFullYear() * 12 + dEmissao.getMonth();
         if (envioMesAno > emissaoMesAno) return 'fora-competencia';
-
-        // 2. Regra: Fora da NP (Dia 28 a 31)
-        const diaEnvio = dEnvio.getDate();
-        if (diaEnvio >= 28) return 'fora-np';
-
+        if (dEnvio.getDate() >= 28) return 'fora-np';
         return 'ok';
     };
 
-    // --- NOVO: FUNÇÃO PARA FORMATAR QUEM ENVIOU ---
-    const getUploadInfoHtml = (by, at) => {
-        if (!by) return '';
-        let dateStr = '';
-        try {
-            // Tenta converter Timestamp do Firestore ou Date string
-            const d = at?.toDate ? at.toDate() : new Date(at);
-            if (!isNaN(d)) {
-                dateStr = d.toLocaleDateString('pt-BR') + ' ' + d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-            }
-        } catch (e) {}
-        
-        return `
-            <div class="mt-1 pt-1 border-t border-gray-100 text-[10px] text-gray-400 leading-tight">
-                <span class="font-semibold text-gray-500">Env:</span> ${by} <br>
-                <span class="text-gray-400">${dateStr}</span>
-            </div>
-        `;
-    };
+    // Filtros
+    let listaFiltrada = [];
+    if (filterType === 'pendente') listaFiltrada = unifiedList.filter(p => !p.urlNotaFiscal);
+    else if (filterType === 'contratos') listaFiltrada = unifiedList.filter(p => p.tipoItem === 'Contrato');
+    else if (filterType === 'aguardando-entrega') listaFiltrada = unifiedList.filter(p => p.status === 'aguardando-entrega' || p.status === 'em-atraso');
+    else if (filterType === 'entregue') listaFiltrada = unifiedList.filter(p => !!p.urlNotaFiscal);
+    else if (filterType === 'fora-np') listaFiltrada = unifiedList.filter(p => getCompliance(p) === 'fora-np');
+    else if (filterType === 'fora-competencia') listaFiltrada = unifiedList.filter(p => getCompliance(p) === 'fora-competencia');
+    else if (filterType === 'com-obs') listaFiltrada = unifiedList.filter(p => p.obsNF && p.obsNF.trim() !== '');
+    else listaFiltrada = unifiedList; // Default 'todos'
 
-    // --- 2. APLICAR FILTROS ---
-    let pedidosFiltrados = [];
-
-    if (filterType === 'pendente') {
-        pedidosFiltrados = pedidosAtivos.filter(p => p.status !== 'finalizado' && !p.urlNotaFiscal);
-    } 
-    else if (filterType === 'aguardando-entrega') {
-        pedidosFiltrados = pedidosAtivos.filter(p => p.status === 'aguardando-entrega' || p.status === 'em-atraso');
-    }
-    else if (filterType === 'entregue') {
-        pedidosFiltrados = pedidosAtivos.filter(p => !!p.urlNotaFiscal || ['aguardando-lancamento', 'finalizado', 'entregue'].includes(p.status));
-    }
-    else if (filterType === 'fora-np') {
-        pedidosFiltrados = pedidosAtivos.filter(p => getCompliance(p) === 'fora-np');
-    }
-    else if (filterType === 'fora-competencia') {
-        pedidosFiltrados = pedidosAtivos.filter(p => getCompliance(p) === 'fora-competencia');
-    }
-    else if (filterType === 'com-obs') {
-        pedidosFiltrados = pedidosAtivos.filter(p => p.obsNF && p.obsNF.trim() !== '');
-    }
-    else {
-        // Todos
-        pedidosFiltrados = pedidosAtivos;
-    }
-
-    if (pedidosFiltrados.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="7" class="py-10 text-center text-gray-500">Nenhum pedido encontrado para o filtro: <strong>${filterType}</strong>.</td></tr>`;
+    if (listaFiltrada.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="8" class="py-10 text-center text-gray-500">Nenhum item encontrado.</td></tr>`;
         return;
     }
 
-    // --- 3. AGRUPAMENTO (RN) ---
-    const grouped = [];
+    // Agrupamento
+    const finalRenderList = [];
     const rnMap = new Map();
 
-    pedidosFiltrados.forEach(p => {
-        const compliance = getCompliance(p);
-        
-        if (p.numRN) {
-            if (!rnMap.has(p.numRN)) {
-                rnMap.set(p.numRN, { 
-                    isGroup: true, 
-                    numRN: p.numRN,
-                    numOC: p.numOC,
-                    items: [p], 
-                    total: parseFloat(p.valorTotal||0), 
-                    status: p.status, 
-                    fornecedor: p.fornecedor,
-                    hasNF: !!p.urlNotaFiscal,
-                    nfUrl: p.urlNotaFiscal,
-                    fin: p.fin,
-                    dataVcto: p.dataVcto,
-                    obsNF: p.obsNF, 
-                    compliance: compliance,
-                    // NOVO: Passa os dados de upload para o grupo
-                    nfUploadedBy: p.nfUploadedBy,
-                    nfUploadedAt: p.nfUploadedAt
-                });
-                grouped.push(rnMap.get(p.numRN));
-            } else {
-                const g = rnMap.get(p.numRN);
-                g.items.push(p);
-                g.total += parseFloat(p.valorTotal||0);
-                if(!!p.urlNotaFiscal) g.hasNF = true;
-                if(p.obsNF) g.obsNF = p.obsNF;
-                if(compliance !== 'ok' && compliance !== 'sem-nf') g.compliance = compliance;
-                
-                // NOVO: Atualiza dados de upload no grupo se encontrar no item
-                if(p.nfUploadedBy) g.nfUploadedBy = p.nfUploadedBy;
-                if(p.nfUploadedAt) g.nfUploadedAt = p.nfUploadedAt;
-
-                if (p.status === 'aguardando-entrega' || p.status === 'em-atraso') {
-                    g.status = p.status;
-                }
-            }
+    listaFiltrada.forEach(p => {
+        if (p.tipoItem === 'Contrato') {
+            finalRenderList.push({ isGroup: false, compliance: getCompliance(p), ...p });
         } else {
-            grouped.push({ 
-                isGroup: false, 
-                ...p,
-                hasNF: !!p.urlNotaFiscal,
-                nfUrl: p.urlNotaFiscal,
-                compliance: compliance
-            });
+            if (p.numRN) {
+                if (!rnMap.has(p.numRN)) {
+                    rnMap.set(p.numRN, { 
+                        isGroup: true, numRN: p.numRN, items: [p], total: p.valorItem, status: p.status, 
+                        fornecedor: p.fornecedor, hasNF: !!p.urlNotaFiscal, nfUrl: p.urlNotaFiscal, 
+                        fin: p.fin, dataVcto: p.dataVcto, obsNF: p.obsNF, tipoItem: 'Pedido', compliance: getCompliance(p),
+                        nfUploadedBy: p.nfUploadedBy, nfUploadedAt: p.nfUploadedAt
+                    });
+                    finalRenderList.push(rnMap.get(p.numRN));
+                } else {
+                    const g = rnMap.get(p.numRN); g.items.push(p); g.total += p.valorItem;
+                    if(!!p.urlNotaFiscal) g.hasNF = true;
+                    if(p.status === 'aguardando-entrega' || p.status === 'em-atraso') g.status = p.status;
+                }
+            } else {
+                finalRenderList.push({ isGroup: false, compliance: getCompliance(p), hasNF: !!p.urlNotaFiscal, nfUrl: p.urlNotaFiscal, ...p });
+            }
         }
     });
 
-    // --- 4. RENDERIZAÇÃO ---
-    grouped.forEach(item => {
+    // Renderização
+    finalRenderList.forEach(item => {
         const tr = document.createElement('tr');
         
-        // Cor de Fundo (Retorno FIN)
-        let rowClass = item.obsNF 
-            ? "bg-yellow-50 hover:bg-yellow-100 border-b border-yellow-200" 
-            : "hover:bg-gray-50 border-b border-gray-100";
-        tr.className = rowClass;
+        let rowClass = item.obsNF ? "bg-yellow-50 hover:bg-yellow-100" : "hover:bg-gray-50";
+        if (item.tipoItem === 'Contrato') rowClass = "bg-purple-50 hover:bg-purple-100 border-b border-purple-200";
+        tr.className = `${rowClass} border-b border-gray-100 transition-colors`;
 
-        // Tags
-        let complianceTag = '';
-        if (item.compliance === 'fora-np') {
-            complianceTag = `<span class="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-800 border border-orange-200" title="Enviado entre dia 28-31">Fora NP</span>`;
-        } else if (item.compliance === 'fora-competencia') {
-            complianceTag = `<span class="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800 border border-red-200" title="Enviado no mês seguinte">Fora Comp.</span>`;
+        // Checkbox Logic
+        const targetId = item.isGroup ? item.numRN : item.id;
+        const isSelected = state.selectedNFItems.includes(targetId);
+        
+        let checkboxHtml = '';
+        // Mostra checkbox se for gestor/recebedor e NAO tiver NF ainda (para agrupar)
+        if ((isGestor || isRecebedor) && !item.hasNF) {
+            checkboxHtml = `<input type="checkbox" class="nf-row-checkbox h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600" value="${targetId}" ${isSelected ? 'checked' : ''} onchange="window.toggleNFSelection('${targetId}')">`;
+        } else {
+            checkboxHtml = `<span class="text-gray-300">-</span>`;
         }
 
-        const targetId = item.isGroup ? item.numRN : item.id;
-        const nfIcon = item.hasNF ? `<span class="ml-2 text-green-600"><svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg></span>` : '';
+        // Tags e Ícones
+        let complianceTag = '';
+        if (item.compliance === 'fora-np') complianceTag = `<span class="ml-2 px-1 text-[10px] bg-orange-100 text-orange-800 rounded border border-orange-200">Fora NP</span>`;
+        if (item.compliance === 'fora-competencia') complianceTag = `<span class="ml-2 px-1 text-[10px] bg-red-100 text-red-800 rounded border border-red-200">Fora Comp.</span>`;
 
-        // Display Observação
-        const obsDisplay = item.obsNF 
-            ? `<div class="mt-1 text-[10px] text-red-700 font-bold bg-white border border-red-200 p-1 rounded inline-flex items-center gap-1 max-w-[200px]" title="${item.obsNF}">
-                <span>↩️ FIN:</span> <span class="truncate">${item.obsNF}</span>
-               </div>` 
-            : '';
+        let refHtml = item.referencia;
+        let iconHtml = `<svg class="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>`;
+        if(item.tipoItem === 'Contrato') {
+            refHtml = `<span class="bg-purple-600 text-white text-[10px] px-1 rounded font-bold mr-1">CONTRATO</span> ${item.referencia}`;
+            iconHtml = `<svg class="w-4 h-4 text-purple-700" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>`;
+        }
+
+        let descHtml = `<div class="font-medium">${item.descricaoItem}</div>`;
+        if (item.isGroup) descHtml = `<div class="font-medium">Agrupamento (${item.items.length} itens)</div>`;
+        else if (item.tipoItem === 'Contrato') descHtml = `<div class="font-bold text-purple-900">${item.descricaoItem}</div><div class="text-xs text-purple-600">Processado Auto</div>`;
+        else descHtml += `<div class="text-xs text-gray-500">${item.unidade || ''}</div>`;
+
+        // Upload Info
+        let uploadInfo = '';
+        if(item.nfUploadedBy) {
+             let d = item.nfUploadedAt ? (item.nfUploadedAt.toDate ? item.nfUploadedAt.toDate() : new Date(item.nfUploadedAt)) : null;
+             let dStr = d ? d.toLocaleDateString() : '';
+             uploadInfo = `<div class="text-[10px] text-gray-400 border-t mt-1">Env: ${item.nfUploadedBy} (${dStr})</div>`;
+        }
 
         let actionBtn = '';
         let vctoDisplay = '';
-        
-        // NOVO: Gera o HTML de quem enviou
-        const uploadInfo = getUploadInfoHtml(item.nfUploadedBy, item.nfUploadedAt);
         
         if (isGestor || isRecebedor) {
             if (item.hasNF) {
                 const fin = item.fin || '---';
                 const vcto = item.dataVcto ? item.dataVcto.split('-').reverse().join('/') : '---';
+                vctoDisplay = isGestor ? `<div class="text-sm font-medium">${fin}</div><div class="text-xs text-gray-500">Vcto: ${vcto}</div>${uploadInfo}` : `<div class="text-xs text-gray-400">Recebido</div>${uploadInfo}`;
                 
-                // NOVO: Adiciona uploadInfo na visualização
-                vctoDisplay = isGestor 
-                    ? `<div class="text-sm font-medium text-gray-900">${fin}</div><div class="text-xs text-gray-500">Vcto: ${vcto}</div>${obsDisplay}${uploadInfo}` 
-                    : `<div class="text-xs text-gray-400">NF Recebida</div>${uploadInfo}`;
-                
-                actionBtn = `
-                    <div class="flex justify-end gap-2">
-                        <a href="${item.nfUrl}" target="_blank" class="bg-white border border-gray-300 text-gray-700 px-2 py-1 rounded text-xs hover:bg-gray-50 flex items-center gap-1">Ver NF</a>
-                        <button onclick="openNFModal('${targetId}', ${item.isGroup})" class="text-primary-600 hover:text-primary-800"><svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg></button>
-                    </div>`;
+                actionBtn = `<div class="flex justify-end gap-2"><a href="${item.nfUrl || item.urlNotaFiscal}" target="_blank" class="bg-white border text-gray-700 px-2 py-1 rounded text-xs hover:bg-gray-50">Ver Doc</a></div>`;
+                if(item.tipoItem === 'Contrato') {
+                     actionBtn = `<div class="flex justify-end gap-2"><button onclick="window.openDetalhesContrato('${item.id}')" class="text-purple-600 hover:text-purple-800"><svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg></button></div>`;
+                }
             } else {
-                vctoDisplay = isGestor ? `<div class="text-xs text-gray-400">Aguardando NF</div>${obsDisplay}` : '';
+                vctoDisplay = isGestor ? `<div class="text-xs text-gray-400">Aguardando</div>` : '';
                 actionBtn = `<button onclick="openNFModal('${targetId}', ${item.isGroup})" class="bg-green-600 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-green-700 shadow-sm flex items-center gap-1 ml-auto">Anexar NF</button>`;
             }
         } else {
-            actionBtn = '---'; 
-            // Para solicitante, mostra apenas que recebeu ou não, sem dados financeiros sensíveis
-            vctoDisplay = item.hasNF ? `<div class="text-xs text-gray-400">Recebido</div>${uploadInfo}` : '---';
+            actionBtn = '---'; vctoDisplay = item.hasNF ? `<div class="text-xs text-gray-400">Recebido</div>` : '---';
         }
 
-        if (item.isGroup) {
-            const st = STATUS_MAP[item.status] || { text: item.status, class: "bg-gray-100" };
-            const ocDisplay = item.numOC ? `OC ${item.numOC}` : `RN ${item.numRN}`;
-            // Gestor vê a coluna FIN/Vcto, Solicitante também pode ver (controlado pelo conteúdo de vctoDisplay)
-            const finVctoCell = `<td class="px-4 py-4 text-left">${vctoDisplay}</td>`;
-            
-            // Botão de Grupo
-            let groupActionHtml = actionBtn;
-            if(item.isGroup && isGestor && item.hasNF) {
-                groupActionHtml = `<div class="flex justify-end gap-2"><a href="${item.nfUrl}" target="_blank" class="text-gray-700 px-2 border rounded text-xs bg-white">Ver NF</a><button onclick="openNFModal('${item.numRN}', true)" class="text-primary-600"><svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg></button></div>`;
-            }
+        const st = STATUS_MAP[item.status] || { text: item.status, class: "bg-gray-100" };
 
-            tr.innerHTML = `
-                <td class="px-4 py-4 font-bold text-primary-700 flex items-center gap-2">
-                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" /></svg>
-                    ${ocDisplay} ${nfIcon} ${complianceTag}
-                </td>
-                <td class="px-4 py-4 text-sm text-gray-600">Agrupamento (${item.items.length} itens)</td>
-                <td class="px-4 py-4 text-sm text-gray-900">${item.fornecedor || '-'}</td>
-                <td class="px-4 py-4 text-sm font-bold text-gray-900">R$ ${item.total.toFixed(2)}</td>
-                <td class="px-4 py-4"><span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${st.class}">${st.text}</span></td>
-                ${finVctoCell} 
-                <td class="px-4 py-4 text-right flex items-center justify-end gap-2">
-                    ${groupActionHtml}
-                    <button onclick="window.openGroupDetails('${item.numRN}')" class="text-primary-600 hover:text-primary-800 text-sm font-semibold">Ver Itens</button>
-                </td>
-            `;
-        } else {
-            const st = STATUS_MAP[item.status] || { text: item.status, class: "bg-gray-100" };
-            const finVctoCell = `<td class="px-4 py-4 text-left">${vctoDisplay}</td>`;
-
-            tr.innerHTML = `
-                <td class="px-4 py-4 text-sm text-gray-500 font-mono">--- ${nfIcon} ${complianceTag}</td>
-                <td class="px-4 py-4 text-sm text-gray-900">
-                    <div class="font-medium">${item.nomeProduto}</div>
-                    <div class="text-xs text-gray-500">${item.unidade}</div>
-                </td>
-                <td class="px-4 py-4 text-sm text-gray-900">${item.fornecedor || '-'}</td>
-                <td class="px-4 py-4 text-sm font-bold text-gray-900">R$ ${parseFloat(item.valorTotal).toFixed(2)}</td>
-                <td class="px-4 py-4"><span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${st.class}">${st.text}</span></td>
-                ${finVctoCell}
-                <td class="px-4 py-4 text-right">
-                    ${actionBtn}
-                </td>
-            `;
-        }
+        tr.innerHTML = `
+            <td class="px-4 py-4 text-center">${checkboxHtml}</td>
+            <td class="px-4 py-4 font-bold text-gray-700 flex items-center gap-2">${iconHtml} ${refHtml} ${complianceTag}</td>
+            <td class="px-4 py-4 text-sm text-gray-900">${descHtml}</td>
+            <td class="px-4 py-4 text-sm text-gray-900">${item.fornecedor || '-'}</td>
+            <td class="px-4 py-4 text-sm font-bold text-gray-900">R$ ${(item.isGroup ? item.total : item.valorItem).toFixed(2)}</td>
+            <td class="px-4 py-4"><span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${st.class}">${st.text}</span></td>
+            <td class="px-4 py-4 text-left">${vctoDisplay}</td>
+            <td class="px-4 py-4 text-right">${actionBtn}</td>
+        `;
         tbody.appendChild(tr);
     });
+};
+
+// 2. Funções Auxiliares de Lote (NOVAS)
+window.toggleNFSelection = (id) => {
+    if (state.selectedNFItems.includes(id)) state.selectedNFItems = state.selectedNFItems.filter(x => x !== id);
+    else state.selectedNFItems.push(id);
+    window.updateNFBulkBar();
+};
+
+window.clearNFSelection = () => {
+    state.selectedNFItems = [];
+    document.querySelectorAll('.nf-row-checkbox').forEach(cb => cb.checked = false);
+    window.updateNFBulkBar();
+};
+
+window.updateNFBulkBar = () => {
+    const bar = document.getElementById('bulk-bar-nf');
+    const countSpan = document.getElementById('bulk-count-nf');
+    if (bar && countSpan) {
+        if (state.selectedNFItems.length > 0) {
+            bar.classList.remove('translate-y-full');
+            countSpan.textContent = `${state.selectedNFItems.length} item(s) selecionado(s)`;
+        } else {
+            bar.classList.add('translate-y-full');
+        }
+    }
+};
+
+window.openNFModalBulk = () => {
+    const f = document.getElementById('form-nf-upload');
+    f.reset();
+    f.dataset.mode = 'bulk'; 
+    f.dataset.ids = JSON.stringify(state.selectedNFItems);
+
+    const submitBtn = f.querySelector('button[type="submit"]');
+    submitBtn.textContent = `Lançar 1 NF para ${state.selectedNFItems.length} Itens`;
+    submitBtn.classList.remove('bg-gray-400');
+    submitBtn.classList.add('bg-indigo-600', 'hover:bg-indigo-700');
+    
+    if (currentUserProfile.perfil !== 'Recebedor') {
+        const finArea = document.getElementById('nf-admin-fields');
+        if(finArea) finArea.classList.remove('hidden');
+    }
+    document.getElementById('file-nf-upload').disabled = false;
+    document.getElementById('modal-nf').classList.remove('hidden');
 };
 
 
@@ -2895,17 +2859,18 @@ window.openSupplierAttachments = (id) => {
 
     const form = document.getElementById('form-fornecedor');
     
-    // ... (preenche campos de texto normais: nome, cnpj, etc) ...
     form.nome.value = fData.nome || '';
     form.cnpj.value = fData.cnpj || '';
     form.segmento.value = fData.segmento || '';
     form.email.value = fData.email || '';
     form.telefone.value = fData.telefone || '';
     form.endereco.value = fData.endereco || '';
+    
+    // Novos Campos
     form.nomeContato.value = fData.nomeContato || '';
     form.observacao.value = fData.observacao || '';
 
-    // --- LÓGICA DE ANEXOS ---
+    // Anexos
     const btnAnexos = document.getElementById('btn-ver-anexos-fornecedor');
     if (fData.urlAnexos && fData.urlAnexos.length > 0) {
         btnAnexos.classList.remove('hidden');
@@ -2914,7 +2879,6 @@ window.openSupplierAttachments = (id) => {
     } else {
         btnAnexos.classList.add('hidden');
     }
-    // ------------------------
 
     form.dataset.id = id;
     const titleEl = document.querySelector('#modal-fornecedor h3');
@@ -2925,89 +2889,108 @@ window.openSupplierAttachments = (id) => {
 
         // NOVO: Listener para Upload de NF e Dados Financeiros
             document.getElementById('form-nf-upload').addEventListener('submit', async e => {
-                e.preventDefault(); // <--- ISSO IMPEDE O RESET DA PÁGINA
-                
-                const f = e.target;
-                const btn = f.querySelector('button[type="submit"]');
-                const idOrRN = f.dataset.target;
-                const isGroup = f.dataset.isgroup === 'true';
-                const file = document.getElementById('file-nf-upload').files[0];
+    e.preventDefault();
+    const f = e.target;
+    const btn = f.querySelector('button[type="submit"]');
+    const file = document.getElementById('file-nf-upload').files[0];
+    const isBulkMode = f.dataset.mode === 'bulk';
+    
+    btn.disabled = true; btn.textContent = "Processando...";
 
-                btn.disabled = true; 
-                btn.textContent = "Processando...";
+    try {
+        let updateData = {};
+        
+        // Upload (Comum)
+        if (file) {
+            const r = ref(storage, `artifacts/${appId}/nfs/${Date.now()}_${file.name}`);
+            await uploadBytes(r, file);
+            const url = await getDownloadURL(r);
+            
+            updateData.urlNotaFiscal = url;
+            updateData.status = 'entregue'; 
+            updateData.nfUploadedBy = currentUserProfile.nome;
+            updateData.nfUploadedAt = Timestamp.now();
+        }
 
-                try {
-                    let updateData = {};
-                    
-                    // 1. Se houver arquivo, faz upload
-                    if (file) {
-                        const r = ref(storage, `artifacts/${appId}/nfs/${Date.now()}_${file.name}`);
-                        await uploadBytes(r, file);
-                        const url = await getDownloadURL(r);
-                        
-                        updateData.urlNotaFiscal = url;
-                        // Se anexou NF, assume que foi entregue (se ainda não estiver finalizado)
-                        updateData.status = 'entregue'; 
-                        updateData.nfUploadedBy = currentUserProfile.nome;
-                        updateData.nfUploadedAt = Timestamp.now();
-                    }
+        // Dados Financeiros
+        if (f.fin.value) updateData.fin = f.fin.value;
+        if (f.dataEmissao.value) updateData.dataEmissao = f.dataEmissao.value;
+        if (f.dataVcto.value) updateData.dataVcto = f.dataVcto.value;
+        if (f.dataDoDia.value) updateData.dataDoDia = f.dataDoDia.value; 
+        if (f.obsNF.value) updateData.obsNF = f.obsNF.value;
 
-                    // 2. Coleta dados financeiros (se visíveis/preenchidos)
-                    if (f.fin.value) updateData.fin = f.fin.value;
-                    if (f.dataEmissao.value) updateData.dataEmissao = f.dataEmissao.value;
-                    if (f.dataVcto.value) updateData.dataVcto = f.dataVcto.value;
-                    if (f.dataDoDia.value) updateData.dataDoDia = f.dataDoDia.value; 
-                    if (f.obsNF.value) updateData.obsNF = f.obsNF.value;
+        if (Object.keys(updateData).length === 0 && !isBulkMode) {
+            showNotification("Nenhuma alteração detectada.", "error");
+            return;
+        }
 
-                    updateData.obsNF = f.obsNF.value;
-                    // updateData.modalidade não salvamos no pedido geralmente, é propriedade do item, 
-                    // mas se quiser salvar a correção:
-                    // updateData.modalidade = f.modalidadeNF.value; 
+        const batch = writeBatch(db);
 
-                    // 3. Verifica se tem algo para atualizar
-                    if (Object.keys(updateData).length === 0) {
-                        showNotification("Nenhuma alteração detectada (sem arquivo ou dados).", "error");
-                        return;
-                    }
-
-                    // 4. Aplica a atualização (Individual ou em Lote/Grupo)
-                    if (isGroup) {
-                        // Busca todos os itens da RN e atualiza
-                        const q = query(collection(db, `artifacts/${appId}/public/data/pedidos`), where("numRN", "==", idOrRN));
-                        const snapshot = await getDocs(q);
-                        const batch = writeBatch(db);
-                        
-                        snapshot.forEach(docSnap => {
-                            // Não sobrescreve status se já estiver 'finalizado', a menos que seja forçado
-                            const currentStatus = docSnap.data().status;
-                            let dataToUpdate = { ...updateData };
-                            
-                            // Preserva status se já finalizado, a menos que seja admin querendo editar dados financeiros
-                            if (currentStatus === 'finalizado' && updateData.status === 'entregue') {
-                                delete dataToUpdate.status;
-                            }
-                            
-                            batch.update(docSnap.ref, dataToUpdate);
+        if (isBulkMode) {
+            const selectedIds = JSON.parse(f.dataset.ids || '[]');
+            
+            for (const id of selectedIds) {
+                // Verifica Pedidos
+                const pedido = state.pedidos.find(p => p.id === id);
+                if (pedido) {
+                    const docRef = doc(db, `artifacts/${appId}/public/data/pedidos`, id);
+                    batch.update(docRef, updateData);
+                } else {
+                    // Verifica RN (Grupos)
+                    const itensDaRN = state.pedidos.filter(p => p.numRN === id);
+                    if (itensDaRN.length > 0) {
+                        itensDaRN.forEach(subItem => {
+                            const ref = doc(db, `artifacts/${appId}/public/data/pedidos`, subItem.id);
+                            batch.update(ref, updateData);
                         });
-                        await batch.commit();
-                        showNotification("NF/Dados aplicados ao Agrupamento!", "success");
-
                     } else {
-                        // Item Individual
-                        await updateDoc(doc(db, `artifacts/${appId}/public/data/pedidos`, idOrRN), updateData);
-                        showNotification("NF/Dados atualizados com sucesso!", "success");
+                        // Verifica Contratos
+                        const contrato = state.contratos.find(c => c.id === id);
+                        if (contrato) {
+                            const contractUpdate = { ...updateData };
+                            if(updateData.urlNotaFiscal) contractUpdate.urlArquivo = updateData.urlNotaFiscal;
+                            const ref = doc(db, `artifacts/${appId}/public/data/contratos`, id);
+                            batch.update(ref, contractUpdate);
+                        }
                     }
-
-                    window.closeNFModal();
-
-                } catch (err) {
-                    console.error(err);
-                    showNotification("Erro ao salvar NF: " + err.message, "error");
-                } finally {
-                    btn.disabled = false;
-                    btn.textContent = "Salvar Dados e Recebimento";
                 }
-            });
+            }
+            await batch.commit();
+            showNotification(`NF aplicada a ${selectedIds.length} itens!`, "success");
+            window.clearNFSelection();
+
+        } else {
+            // Modo Individual
+            const idOrRN = f.dataset.target;
+            const isGroup = f.dataset.isgroup === 'true';
+
+            if (isGroup) {
+                const q = query(collection(db, `artifacts/${appId}/public/data/pedidos`), where("numRN", "==", idOrRN));
+                const snapshot = await getDocs(q);
+                snapshot.forEach(docSnap => {
+                    const currentStatus = docSnap.data().status;
+                    let dataToUpdate = { ...updateData };
+                    if (currentStatus === 'finalizado' && updateData.status === 'entregue') {
+                        delete dataToUpdate.status;
+                    }
+                    batch.update(docSnap.ref, dataToUpdate);
+                });
+                await batch.commit();
+            } else {
+                await updateDoc(doc(db, `artifacts/${appId}/public/data/pedidos`, idOrRN), updateData);
+            }
+            showNotification("NF atualizada!", "success");
+        }
+
+        window.closeNFModal();
+
+    } catch (err) {
+        console.error(err);
+        showNotification("Erro ao salvar: " + err.message, "error");
+    } finally {
+        btn.disabled = false; btn.textContent = "Salvar Dados e Recebimento";
+    }
+});
 
 
         // --- MODAL GRUPO & ADMIN ---
@@ -4882,25 +4865,18 @@ document.getElementById('form-fornecedor').addEventListener('submit', async e =>
     e.preventDefault();
     const f = e.target;
     const docId = f.dataset.id;
-    const btn = f.querySelector('button[type="submit"]'); // Pega o botão para feedback
+    const btn = f.querySelector('button[type="submit"]');
 
     btn.disabled = true; btn.textContent = "Salvando...";
 
-    // 1. Upload de Arquivos (Se houver)
+    // 1. Upload de Arquivos
     let uploadedUrls = [];
     const files = f.fileAttachments.files;
     
-    // Imports necessários no topo do arquivo (já devem existir): ref, uploadBytes, getDownloadURL, storage, appId
-    // Mas como estamos dentro do type="module", usamos as variáveis globais importadas.
-    
     try {
         if (files.length > 0) {
-            // Import dinâmico das funções do Storage se não estiverem no escopo (assumindo que já estão no topo do script)
-            // Se der erro de referência, certifique-se que 'ref', 'uploadBytes', 'getDownloadURL' estão importados no topo.
-            
             for(let i=0; i < files.length; i++) {
                 const file = files[i];
-                // Cria uma pasta 'suppliers' no storage
                 const storageRef = ref(storage, `artifacts/${appId}/suppliers/${Date.now()}_${file.name}`);
                 await uploadBytes(storageRef, file);
                 const url = await getDownloadURL(storageRef);
@@ -4908,7 +4884,7 @@ document.getElementById('form-fornecedor').addEventListener('submit', async e =>
             }
         }
 
-        // 2. Preparar dados
+        // 2. Preparar dados (INCLUINDO NOVOS CAMPOS)
         const data = {
             nome: f.nome.value, 
             cnpj: f.cnpj.value, 
@@ -4916,37 +4892,32 @@ document.getElementById('form-fornecedor').addEventListener('submit', async e =>
             email: f.email.value, 
             telefone: f.telefone.value, 
             endereco: f.endereco.value,
-            nomeContato: f.nomeContato.value, 
-            observacao: f.observacao.value
+            nomeContato: f.nomeContato.value, // NOVO
+            observacao: f.observacao.value    // NOVO
         };
 
-        // 3. Mesclar Anexos (Novo + Existente)
+        // 3. Mesclar Anexos
         if (docId) {
-            // Se for edição, precisamos preservar os antigos se não quiser sobrescrever
             const existingSupplier = state.fornecedores.find(x => x.id === docId);
             const oldUrls = existingSupplier && existingSupplier.urlAnexos ? existingSupplier.urlAnexos : [];
-            // Adiciona apenas se houver novos uploads. Se não houver upload, mantém os antigos.
-            // Se quiser permitir apagar, a lógica seria mais complexa, aqui estamos apenas ADICIONANDO.
             data.urlAnexos = [...oldUrls, ...uploadedUrls];
             
             await updateDoc(doc(db, `artifacts/${appId}/public/data/fornecedores`, docId), data);
             showNotification("Fornecedor atualizado com sucesso!", "success");
         } else {
-            // Criação
             data.urlAnexos = uploadedUrls;
             await addDoc(collection(db, `artifacts/${appId}/public/data/fornecedores`), data);
             showNotification("Fornecedor cadastrado com sucesso!", "success");
         }
         
-        f.reset(); 
-        f.dataset.id = "";
+        f.reset(); f.dataset.id = "";
         document.getElementById('modal-fornecedor').classList.add('hidden');
         
     } catch(err){ 
         console.error("ERRO AO SALVAR FORNECEDOR:", err);
         showNotification("Erro ao salvar: " + err.message, "error"); 
     } finally {
-        btn.disabled = false; btn.textContent = "Salvar";
+        btn.disabled = false; btn.textContent = "Salvar Fornecedor";
     }
 });
 
@@ -5477,34 +5448,36 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
     </div>
 </div>
     
-      <div id="gestao-nf" class="page-content hidden w-full">
+      <div id="gestao-nf" class="page-content hidden w-full relative">
     <div class="flex justify-between items-center mb-6">
         <h2 class="text-2xl font-bold text-gray-900">Gestão de Nota Fiscal</h2>
-        <button onclick="openRelatorioMensal()" class="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 focus:outline-none">
-            <svg class="mr-2 -ml-1 h-5 w-5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-            </svg>
-            Relatório Mensal
-        </button>
-<select id="filter-nf-status" class="block w-56 rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-white">
-    <option value="pendente" selected>Aguardando Nota (Sem NF)</option>
-    
-    <option value="aguardando-entrega">Aguardando Entrega</option>
-    <option value="entregue">Notas Entregues (Todas)</option>
-    
-    <option value="fora-np">⚠️ Fora da NP (Dia 28-31)</option>
-    <option value="fora-competencia">⛔ Fora da Competência</option>
-    <option value="com-obs">↩️ Retorno FIN</option>
-    
-    <option value="todos">Ver Todos</option>
-</select>
+        
+        <div class="flex gap-2">
+            <button onclick="openRelatorioMensal()" class="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 focus:outline-none">
+                <svg class="mr-2 -ml-1 h-5 w-5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                Relatório Mensal
+            </button>
+
+            <select id="filter-nf-status" class="block w-56 rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-white">
+                <option value="todos" selected>Ver Todos</option>
+                <option value="pendente">Aguardando Nota (Sem NF)</option>
+                <option value="contratos">📜 Apenas Contratos</option> <option value="aguardando-entrega">Aguardando Entrega</option>
+                <option value="entregue">Notas Entregues (Todas)</option>
+                <option value="fora-np">⚠️ Fora da NP (Dia 28-31)</option>
+                <option value="fora-competencia">⛔ Fora da Competência</option>
+                <option value="com-obs">↩️ Retorno FIN</option>
+            </select>
+        </div>
     </div>
 
-    <div class="bg-white shadow-sm border border-gray-200 rounded-lg overflow-hidden">
-        <div class="overflow-x-auto">
+    <div class="bg-white shadow-sm border border-gray-200 rounded-lg overflow-hidden pb-16"> <div class="overflow-x-auto">
             <table class="min-w-full divide-y divide-gray-200">
                 <thead class="bg-gray-50">
                     <tr>
+                        <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase w-10">
+                            </th>
                         <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">OC / Ref</th>
                         <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Descrição</th>
                         <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Fornecedor</th>
@@ -5518,6 +5491,40 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
             </table>
         </div>
     </div>
+
+    <div id="bulk-bar-nf" class="fixed bottom-0 inset-x-0 bg-indigo-900 border-t border-indigo-700 shadow-2xl z-40 transform translate-y-full transition-transform duration-300 p-4 flex items-center justify-between lg:pl-72 text-white">
+        <div class="flex items-center space-x-4">
+            <span class="bg-indigo-700 text-indigo-100 text-xs font-bold px-2.5 py-0.5 rounded-full uppercase tracking-wide border border-indigo-500">Lote Fiscal</span>
+            <span id="bulk-count-nf" class="font-semibold">0 selecionados</span>
+        </div>
+        <div class="flex gap-3">
+            <button onclick="window.openNFModalBulk()" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-bold rounded-md shadow-sm text-indigo-900 bg-white hover:bg-indigo-50 focus:outline-none">
+                <svg class="mr-2 -ml-1 h-5 w-5 text-indigo-700" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                Lançar 1 NF para Todos
+            </button>
+            <button onclick="window.clearNFSelection()" class="text-indigo-200 hover:text-white text-sm underline">Cancelar</button>
+        </div>
+    </div>
+</div>
+
+    <div id="bulk-bar-nf" class="fixed bottom-0 inset-x-0 bg-indigo-900 border-t border-indigo-700 shadow-2xl z-40 transform translate-y-full transition-transform duration-300 p-4 flex items-center justify-between lg:pl-72 text-white">
+    <div class="flex items-center space-x-4">
+        <span class="bg-indigo-700 text-indigo-100 text-xs font-bold px-2.5 py-0.5 rounded-full uppercase tracking-wide border border-indigo-500">Lote Fiscal</span>
+        <span id="bulk-count-nf" class="font-semibold">0 selecionados</span>
+    </div>
+    <div class="flex gap-3">
+        <button onclick="window.openNFModalBulk()" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-bold rounded-md shadow-sm text-indigo-900 bg-white hover:bg-indigo-50 focus:outline-none">
+            <svg class="mr-2 -ml-1 h-5 w-5 text-indigo-700" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            Lançar 1 NF para Todos
+        </button>
+        <button onclick="window.clearNFSelection()" class="text-indigo-200 hover:text-white text-sm underline">Cancelar</button>
+    </div>
+</div>
+
 </div>
     
             <!-- FORNECEDORES PAGE -->
