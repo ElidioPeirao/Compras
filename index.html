@@ -1455,6 +1455,7 @@ window.openBoletoModal = () => {
 // Renderizar Tabela Atualizada
 // Renderizar Tabela Atualizada (COM LÓGICA DE DETALHES)
 // Renderizar Tabela Atualizada (COM BOTÕES DE AÇÃO)
+// Renderizar Tabela de Contratos (ATUALIZADA COM FILTRO DE CANCELADOS)
 window.renderContratosPage = () => {
     const tbody = document.getElementById('tabela-contratos-body');
     if (!tbody) return;
@@ -1464,9 +1465,29 @@ window.renderContratosPage = () => {
     const typeFilter = document.getElementById('filter-contrato-tipo')?.value || '';
 
     const list = state.contratos.filter(c => {
-        if (typeFilter && c.tipo !== typeFilter) return false;
+        // 1. Lógica de Busca (Texto)
         const searchText = (c.descricao || '') + (c.quemEnviou || '') + (c.fornecedorNome || '') + (c.numRN || '');
         if (term && !searchText.toLowerCase().includes(term)) return false;
+
+        // 2. Lógica de Filtro por Tipo/Status
+        if (typeFilter === 'Cancelado') {
+            // Se o filtro for 'Cancelado', mostra APENAS os cancelados (de qualquer tipo)
+            if (c.status !== 'Cancelado') return false;
+        } 
+        else if (typeFilter === 'Contrato') {
+            // Se for 'Contrato', deve ser tipo Contrato E NÃO pode estar cancelado
+            if (c.tipo !== 'Contrato' || c.status === 'Cancelado') return false;
+        } 
+        else if (typeFilter === 'Boleto') {
+            // Se for 'Boleto', deve ser tipo Boleto E NÃO pode estar cancelado
+            if (c.tipo !== 'Boleto' || c.status === 'Cancelado') return false;
+        } 
+        else {
+            // Se for 'Todos' (vazio), mostra tudo MENOS os cancelados (para limpar a visão)
+            // Se quiser ver cancelado, o usuário deve ir no filtro específico.
+            if (c.status === 'Cancelado') return false;
+        }
+
         return true;
     });
 
@@ -1481,7 +1502,7 @@ window.renderContratosPage = () => {
         const isCancelled = c.status === 'Cancelado';
         
         // Estilo visual para cancelado
-        const rowOpacity = isCancelled ? 'opacity-50 bg-gray-50' : 'hover:bg-gray-50';
+        const rowOpacity = isCancelled ? 'opacity-60 bg-red-50' : 'hover:bg-gray-50';
         const textDecoration = isCancelled ? 'line-through text-gray-400' : 'text-gray-900';
 
         let icon = '';
@@ -1492,7 +1513,7 @@ window.renderContratosPage = () => {
         if (c.tipo === 'Contrato') {
             // CONTRATO
             if (isCancelled) {
-                icon = '<span class="text-red-700 bg-red-100 px-2 py-1 rounded text-xs font-bold border border-red-200">Cancelado</span>';
+                icon = '<span class="text-red-700 bg-white px-2 py-1 rounded text-xs font-bold border border-red-200">Cancelado</span>';
             } else {
                 icon = '<span class="text-green-700 bg-green-100 px-2 py-1 rounded text-xs font-bold border border-green-200">Contrato OK</span>';
             }
@@ -1500,7 +1521,7 @@ window.renderContratosPage = () => {
             mainText = c.fornecedorNome || c.descricao;
             subText = `RN: ${c.numRN || '?'} | Base: ${c.contratoBase || '-'}`;
             
-            // Botões de Ação (Ver, Editar, Cancelar)
+            // Botões de Ação
             actionCell = `
                 <div class="flex items-center justify-end gap-1">
                     <button onclick="window.openDetalhesContrato('${c.id}')" class="text-blue-600 hover:text-blue-800 p-1 bg-blue-50 rounded border border-blue-100" title="Ver Detalhes">
@@ -1519,7 +1540,7 @@ window.renderContratosPage = () => {
         } else {
             // BOLETO PENDENTE
             icon = '<span class="text-orange-600 bg-orange-100 px-2 py-1 rounded text-xs font-bold">Boleto Pendente</span>';
-            if (isCancelled) icon = '<span class="text-red-700 bg-red-100 px-2 py-1 rounded text-xs font-bold">Cancelado</span>';
+            if (isCancelled) icon = '<span class="text-red-700 bg-white px-2 py-1 rounded text-xs font-bold border border-red-200">Cancelado</span>';
 
             mainText = c.descricao;
             subText = `Vencimento: ${vencimento}`;
@@ -1537,7 +1558,7 @@ window.renderContratosPage = () => {
                     </div>
                 `;
             } else {
-                 actionCell = '<span class="text-xs text-gray-400">Inativo</span>';
+                 actionCell = '<span class="text-xs text-red-500 font-bold">Inativo</span>';
             }
         }
 
@@ -5110,12 +5131,13 @@ document.getElementById('form-fornecedor').addEventListener('submit', async e =>
                      let secondaryApp;
                      try {
                           // Initialize secondary app with unique name to avoid conflict
-                          secondaryApp = initializeApp(firebaseConfig, `Secondary_${Date.now()}`);
-                          const secondaryAuth = getAuth(secondaryApp);
+                          secondaryApp = initializeApp(app.options, `Secondary_${Date.now()}`); 
+                            const secondaryAuth = getAuth(secondaryApp);
                           
                           // Create user
-                          await createUserWithEmailAndPassword(secondaryAuth, f.email.value, pwd);
-                          const newUid = userCred.user.uid;
+                          const userCred = await createUserWithEmailAndPassword(secondaryAuth, f.email.value, pwd);
+
+                            const newUid = userCred.user.uid;   
                           
                           // Save to Firestore
                           await setDoc(doc(db, `artifacts/${appId}/public/data/user_profiles`, newUid), {
@@ -5858,6 +5880,7 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
                 <option value="">Todos</option>
                 <option value="Contrato">Contratos</option>
                 <option value="Boleto">Boletos Avulsos</option>
+                <option value="Cancelado">Itens Cancelados</option> </select>
             </select>
         </div>
     </div>
