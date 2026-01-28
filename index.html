@@ -551,54 +551,78 @@ window.onProcessSupplierChange = () => {
 // --- LÓGICA DE EDIÇÃO DE STATUS DO CONTRATO (NA TELA DE NF) ---
 
 // 1. Abrir o Modal
+// 1. Abrir o Modal de Status/Dados do Contrato
 window.openStatusContratoModal = (id) => {
     const contrato = state.contratos.find(c => c.id === id);
     if (!contrato) return;
 
-    // Preenche os campos
+    // IDs Básicos
     document.getElementById('edit-contrato-id').value = id;
     document.getElementById('edit-contrato-status').value = contrato.status || 'Processado';
-    document.getElementById('edit-contrato-obs').value = contrato.obsFinanceira || ''; // Novo campo para obs financeira
+    document.getElementById('edit-contrato-obs').value = contrato.obsFinanceira || contrato.observacaoGeral || ''; 
     document.getElementById('edit-contrato-data-pag').value = contrato.dataPagamento || '';
+
+    // Novos Campos Fiscais
+    // Data do Dia: Se não tiver, sugere a data de hoje (padrão de entrada)
+    const hoje = new Date().toISOString().split('T')[0];
+    document.getElementById('edit-contrato-data-dia').value = contrato.dataDoDia || contrato.dataRN || hoje;
+    
+    document.getElementById('edit-contrato-fin').value = contrato.fin || '';
+    
+    // Modalidade: Tenta inferir ou usa o salvo. Padrão Serviço para contratos.
+    document.getElementById('edit-contrato-modalidade').value = contrato.modalidade || 'Serviço';
+    
+    document.getElementById('edit-contrato-emissao').value = contrato.dataEmissao || contrato.dataRN || '';
+    document.getElementById('edit-contrato-vcto').value = contrato.dataVcto || contrato.vencimento || '';
 
     document.getElementById('modal-status-contrato').classList.remove('hidden');
 };
 
 // 2. Salvar (Listener)
+// 2. Salvar Status e Dados Financeiros do Contrato
 document.getElementById('form-status-contrato').addEventListener('submit', async (e) => {
     e.preventDefault();
     
     const id = document.getElementById('edit-contrato-id').value;
-    const newStatus = document.getElementById('edit-contrato-status').value;
-    const obs = document.getElementById('edit-contrato-obs').value;
-    const dataPag = document.getElementById('edit-contrato-data-pag').value;
+    
+    // Coleta dos dados do formulário
+    const updatePayload = {
+        status: document.getElementById('edit-contrato-status').value,
+        dataPagamento: document.getElementById('edit-contrato-data-pag').value,
+        
+        // Novos Campos Fiscais
+        dataDoDia: document.getElementById('edit-contrato-data-dia').value,
+        fin: document.getElementById('edit-contrato-fin').value,
+        modalidade: document.getElementById('edit-contrato-modalidade').value,
+        dataEmissao: document.getElementById('edit-contrato-emissao').value,
+        dataVcto: document.getElementById('edit-contrato-vcto').value,
+        
+        obsFinanceira: document.getElementById('edit-contrato-obs').value,
+        
+        // Metadata
+        statusUpdatedAt: new Date(),
+        statusUpdatedBy: currentUserProfile.nome
+    };
     
     const btn = e.target.querySelector('button[type="submit"]');
     btn.disabled = true;
     btn.textContent = "Salvando...";
 
     try {
-        // Importante: Importe 'updateDoc' e 'doc' do firestore se não estiverem no escopo
-        // import { doc, updateDoc } from "..." (geralmente já estão no seu topo)
-        
-        await updateDoc(doc(db, `artifacts/${appId}/public/data/contratos`, id), {
-            status: newStatus,
-            obsFinanceira: obs,
-            dataPagamento: dataPag,
-            statusUpdatedAt: new Date() // Opcional: para rastro
-        });
+        // Importante: updateDoc atualiza apenas os campos passados, mantendo o resto
+        await updateDoc(doc(db, `artifacts/${appId}/public/data/contratos`, id), updatePayload);
 
-        showNotification("Status do contrato atualizado!", "success");
+        showNotification("Dados do contrato atualizados!", "success");
         document.getElementById('modal-status-contrato').classList.add('hidden');
         
-        // A tabela 'renderGestaoNFPage' se atualizará automaticamente pelo onSnapshot
+        // Se a tela de Gestão NF estiver aberta, ela atualizará automaticamente pelo onSnapshot
         
     } catch (error) {
         console.error("Erro ao atualizar contrato:", error);
         showNotification("Erro ao atualizar.", "error");
     } finally {
         btn.disabled = false;
-        btn.textContent = "Salvar Status";
+        btn.textContent = "Salvar Dados";
     }
 });
 
@@ -2775,82 +2799,83 @@ window.renderGestaoNFPage = function() {
 
 
         // Modal e Lógica de Upload NF
-        window.openNFModal = (idOrRN, isGroup) => {
-            const f = document.getElementById('form-nf-upload');
-            f.reset();
-            f.dataset.target = idOrRN;
-            f.dataset.isgroup = isGroup;
+        // Abrir Modal de NF com Suporte a Múltiplas Notas
+window.openNFModal = (idOrRN, isGroup) => {
+    const f = document.getElementById('form-nf-upload');
+    f.reset();
+    f.dataset.target = idOrRN;
+    f.dataset.isgroup = isGroup;
 
-            const isAquisicoes = currentUserProfile.perfil === 'Aquisicoes' || currentUserProfile.perfil === 'Admin';
-            const isRecebedor = currentUserProfile.perfil === 'Recebedor';
-            const finArea = document.getElementById('nf-admin-fields');
-            const fileInput = document.getElementById('file-nf-upload');
-            const submitBtn = f.querySelector('button[type="submit"]');
+    // Elementos UI
+    const containerNotas = document.getElementById('container-notas-existentes');
+    const listaNotas = document.getElementById('lista-notas-vinculadas');
+    const inputValor = document.getElementById('input-nf-valor');
+    
+    // Data de Hoje
+    const today = new Date().toISOString().split('T')[0];
+    document.getElementById('data-do-dia').value = today;
 
-            // --- Lógica de Preenchimento e Visibilidade ---
-            let currentNFUrl = '';
+    // 1. Identificar o item
+    let refItem = null;
+    if (!isGroup) {
+        refItem = state.pedidos.find(p => p.id === idOrRN);
+    } else {
+        // Se for grupo, pega o primeiro item só para referência de dados
+        refItem = state.pedidos.find(p => p.numRN === idOrRN);
+    }
+
+    if (!refItem) return showNotification("Item não encontrado.", "error");
+
+    // 2. Renderizar Notas Existentes
+    listaNotas.innerHTML = '';
+    let totalJaLancado = 0;
+
+    // Verifica se tem o array novo 'historicoNotas'
+    if (refItem.historicoNotas && refItem.historicoNotas.length > 0) {
+        containerNotas.classList.remove('hidden');
+        
+        refItem.historicoNotas.forEach((nota, index) => {
+            totalJaLancado += parseFloat(nota.valor || 0);
             
-            // 1. Identificar itens e preencher campos
-            let itemsToEdit = [];
-            if (!isGroup) {
-                const item = state.pedidos.find(p => p.id === idOrRN);
-                if (item) itemsToEdit.push(item);
-            } else {
-                 itemsToEdit = state.pedidos.filter(p => p.numRN === idOrRN);
-            }
-            if (itemsToEdit.length === 0) return showNotification("Item/Grupo não encontrado.", "error");
+            listaNotas.innerHTML += `
+                <div class="flex justify-between items-center bg-white p-2 rounded border border-gray-200 text-xs">
+                    <div>
+                        <span class="font-bold text-gray-700">NF: ${nota.numero || 'S/N'}</span>
+                        <span class="text-gray-500 mx-1">|</span>
+                        <span>R$ ${parseFloat(nota.valor || 0).toFixed(2)}</span>
+                        <div class="text-gray-400 text-[10px]">${new Date(nota.dataRecebimento).toLocaleDateString('pt-BR')} - ${nota.obs || ''}</div>
+                    </div>
+                    <a href="${nota.url}" target="_blank" class="text-blue-600 hover:text-blue-800 font-bold">Ver PDF</a>
+                </div>
+            `;
+        });
+    } else {
+        // Compatibilidade com sistema antigo (urlNotaFiscal única)
+        if (refItem.urlNotaFiscal) {
+            containerNotas.classList.remove('hidden');
+            listaNotas.innerHTML = `
+                <div class="flex justify-between items-center bg-white p-2 rounded border border-gray-200 text-xs">
+                    <div>
+                        <span class="font-bold text-gray-700">NF (Legado)</span>
+                        <div class="text-gray-400 text-[10px]">Nota única antiga</div>
+                    </div>
+                    <a href="${refItem.urlNotaFiscal}" target="_blank" class="text-blue-600 hover:text-blue-800 font-bold">Ver PDF</a>
+                </div>
+            `;
+        } else {
+            containerNotas.classList.add('hidden');
+        }
+    }
 
-            const refItem = itemsToEdit[0];
-            const modalidadeNF = refItem.modalidade || (itemsToEdit.some(i => i.modalidade === 'Serviço') ? 'Serviço' : 'Produto');
+    // 3. Sugerir valor restante (Valor Total do Pedido - Notas já lançadas)
+    const valorTotalPedido = parseFloat(refItem.valorTotal || 0);
+    const saldoRestante = Math.max(0, valorTotalPedido - totalJaLancado);
+    inputValor.value = saldoRestante.toFixed(2);
 
-            // 2. Preencher UI com dados do item/grupo
-            currentNFUrl = refItem.urlNotaFiscal || ''; 
-            f.fin.value = refItem.fin || '';
-            f.dataEmissao.value = refItem.dataEmissao || '';
-            f.dataVcto.value = refItem.dataVcto || '';
-            f.modalidadeNF.value = modalidadeNF; // Usa a modalidade do item/grupo
-            f.obsNF.value = refItem.obsNF || '';
-            
-            // Data do Dia (Preenche com a data de hoje por padrão)
-            const today = new Date().toISOString().split('T')[0];
-            const dataDoDiaInput = document.getElementById('data-do-dia');
-            if (dataDoDiaInput) dataDoDiaInput.value = today;
-
-            // 3. Controle de UI
-            if (isAquisicoes) {
-                // Gestor: Campos financeiros visíveis e editáveis.
-                finArea.classList.remove('hidden');
-                submitBtn.textContent = "Salvar Dados e Recebimento";
-                fileInput.disabled = false;
-                submitBtn.classList.remove('bg-gray-400', 'cursor-not-allowed');
-                submitBtn.classList.add('bg-green-600', 'hover:bg-green-700');
-                finArea.querySelectorAll('input, select').forEach(el => el.disabled = false);
-            } else if (isRecebedor) {
-                // Recebedor: Campos financeiros ocultos e desabilitados.
-                finArea.classList.add('hidden');
-                finArea.querySelectorAll('input, select').forEach(el => el.disabled = true);
-                
-                if (currentNFUrl) {
-                    // NF já anexada: Bloqueia o upload.
-                    submitBtn.textContent = "NF JÁ ANEXADA";
-                    submitBtn.disabled = true;
-                    submitBtn.classList.add('bg-gray-400', 'cursor-not-allowed');
-                    submitBtn.classList.remove('bg-green-600', 'hover:bg-green-700');
-                    fileInput.disabled = true;
-                    showNotification("NF já anexada. Apenas Aquisição pode editar.", "error");
-                } else {
-                    // NF Pendente: Permite o upload.
-                    submitBtn.textContent = "Anexar NF e Confirmar Recebimento";
-                    submitBtn.disabled = false;
-                    submitBtn.classList.remove('bg-gray-400', 'cursor-not-allowed');
-                    submitBtn.classList.add('bg-green-600', 'hover:bg-green-700');
-                    fileInput.disabled = false;
-                }
-            }
+    document.getElementById('modal-nf').classList.remove('hidden');
+};
 
 
-            document.getElementById('modal-nf').classList.remove('hidden');
-        };
 
         window.closeNFModal = () => document.getElementById('modal-nf').classList.add('hidden');
 
@@ -3059,90 +3084,87 @@ window.openSupplierAttachments = (id) => {
 };
 
         // NOVO: Listener para Upload de NF e Dados Financeiros
-            document.getElementById('form-nf-upload').addEventListener('submit', async e => {
-                e.preventDefault(); // <--- ISSO IMPEDE O RESET DA PÁGINA
-                
-                const f = e.target;
-                const btn = f.querySelector('button[type="submit"]');
-                const idOrRN = f.dataset.target;
-                const isGroup = f.dataset.isgroup === 'true';
-                const file = document.getElementById('file-nf-upload').files[0];
+            // Listener para SALVAR NF (Adiciona ao Histórico)
+document.getElementById('form-nf-upload').addEventListener('submit', async e => {
+    e.preventDefault();
+    const f = e.target;
+    const btn = f.querySelector('button[type="submit"]');
+    const idOrRN = f.dataset.target;
+    const isGroup = f.dataset.isgroup === 'true';
+    const file = document.getElementById('file-nf-upload').files[0];
 
-                btn.disabled = true; 
-                btn.textContent = "Processando...";
+    // Validações básicas
+    if (!file) return showNotification("É obrigatório anexar o arquivo da nota.", "error");
+    const numNF = document.getElementById('input-nf-numero').value;
+    const valorNF = parseFloat(document.getElementById('input-nf-valor').value);
 
-                try {
-                    let updateData = {};
-                    
-                    // 1. Se houver arquivo, faz upload
-                    if (file) {
-                        const r = ref(storage, `artifacts/${appId}/nfs/${Date.now()}_${file.name}`);
-                        await uploadBytes(r, file);
-                        const url = await getDownloadURL(r);
-                        
-                        updateData.urlNotaFiscal = url;
-                        // Se anexou NF, assume que foi entregue (se ainda não estiver finalizado)
-                        updateData.status = 'entregue'; 
-                        updateData.nfUploadedBy = currentUserProfile.nome;
-                        updateData.nfUploadedAt = Timestamp.now();
-                    }
+    btn.disabled = true; 
+    btn.textContent = "Anexando...";
 
-                    // 2. Coleta dados financeiros (se visíveis/preenchidos)
-                    if (f.fin.value) updateData.fin = f.fin.value;
-                    if (f.dataEmissao.value) updateData.dataEmissao = f.dataEmissao.value;
-                    if (f.dataVcto.value) updateData.dataVcto = f.dataVcto.value;
-                    if (f.dataDoDia.value) updateData.dataDoDia = f.dataDoDia.value; 
-                    if (f.obsNF.value) updateData.obsNF = f.obsNF.value;
+    try {
+        // 1. Upload do Arquivo
+        const r = ref(storage, `artifacts/${appId}/nfs/${Date.now()}_${file.name}`);
+        await uploadBytes(r, file);
+        const url = await getDownloadURL(r);
 
-                    updateData.obsNF = f.obsNF.value;
-                    // updateData.modalidade não salvamos no pedido geralmente, é propriedade do item, 
-                    // mas se quiser salvar a correção:
-                    // updateData.modalidade = f.modalidadeNF.value; 
+        // 2. Objeto da Nota para o Histórico
+        const novaNota = {
+            url: url,
+            numero: numNF || 'S/N',
+            valor: valorNF || 0,
+            dataRecebimento: f.dataDoDia.value, // Data que chegou
+            dataEmissao: f.dataEmissao.value,
+            dataVcto: f.dataVcto.value,
+            obs: f.obsNF.value,
+            lancadoPor: currentUserProfile.nome,
+            lancadoEm: Timestamp.now()
+        };
 
-                    // 3. Verifica se tem algo para atualizar
-                    if (Object.keys(updateData).length === 0) {
-                        showNotification("Nenhuma alteração detectada (sem arquivo ou dados).", "error");
-                        return;
-                    }
+        // 3. Dados para atualizar no nível do documento (Para filtros rápidos e status)
+        // Sempre atualizamos esses campos com a "última" nota para aparecer na tabela principal
+        const docUpdate = {
+            status: 'entregue', // Se chegou nota, mudamos para entregue
+            urlNotaFiscal: url, // Mantemos a última URL para compatibilidade visual na tabela
+            fin: numNF,
+            dataDoDia: f.dataDoDia.value,
+            obsNF: f.obsNF.value,
+            
+            // A MÁGICA: Adiciona ao array sem sobrescrever
+            historicoNotas: arrayUnion(novaNota)
+        };
 
-                    // 4. Aplica a atualização (Individual ou em Lote/Grupo)
-                    if (isGroup) {
-                        // Busca todos os itens da RN e atualiza
-                        const q = query(collection(db, `artifacts/${appId}/public/data/pedidos`), where("numRN", "==", idOrRN));
-                        const snapshot = await getDocs(q);
-                        const batch = writeBatch(db);
-                        
-                        snapshot.forEach(docSnap => {
-                            // Não sobrescreve status se já estiver 'finalizado', a menos que seja forçado
-                            const currentStatus = docSnap.data().status;
-                            let dataToUpdate = { ...updateData };
-                            
-                            // Preserva status se já finalizado, a menos que seja admin querendo editar dados financeiros
-                            if (currentStatus === 'finalizado' && updateData.status === 'entregue') {
-                                delete dataToUpdate.status;
-                            }
-                            
-                            batch.update(docSnap.ref, dataToUpdate);
-                        });
-                        await batch.commit();
-                        showNotification("NF/Dados aplicados ao Agrupamento!", "success");
-
-                    } else {
-                        // Item Individual
-                        await updateDoc(doc(db, `artifacts/${appId}/public/data/pedidos`, idOrRN), updateData);
-                        showNotification("NF/Dados atualizados com sucesso!", "success");
-                    }
-
-                    window.closeNFModal();
-
-                } catch (err) {
-                    console.error(err);
-                    showNotification("Erro ao salvar NF: " + err.message, "error");
-                } finally {
-                    btn.disabled = false;
-                    btn.textContent = "Salvar Dados e Recebimento";
-                }
+        // 4. Executa no Firebase
+        if (isGroup) {
+            // Se for Grupo (RN), aplica em todos os itens daquela RN
+            const q = query(collection(db, `artifacts/${appId}/public/data/pedidos`), where("numRN", "==", idOrRN));
+            const snapshot = await getDocs(q);
+            const batch = writeBatch(db);
+            
+            snapshot.forEach(docSnap => {
+                // Para grupos, dividimos o valor da nota? 
+                // Geralmente não, se é agrupado, a nota cobre tudo. 
+                // Mas para simplificar, adicionamos o registro da nota em todos os itens para rastreio.
+                batch.update(docSnap.ref, docUpdate);
             });
+            await batch.commit();
+            showNotification("Nota adicionada ao agrupamento!", "success");
+
+        } else {
+            // Item Individual
+            await updateDoc(doc(db, `artifacts/${appId}/public/data/pedidos`, idOrRN), docUpdate);
+            showNotification("Nota adicionada com sucesso!", "success");
+        }
+
+        window.closeNFModal();
+
+    } catch (err) {
+        console.error(err);
+        showNotification("Erro ao salvar NF: " + err.message, "error");
+    } finally {
+        btn.disabled = false;
+        btn.textContent = "Adicionar Nota";
+    }
+});
 
 
         // --- MODAL GRUPO & ADMIN ---
@@ -6189,64 +6211,66 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
 </div>
         
         <!-- Modal NF Upload (NOVO) -->
-        <div id="modal-nf" class="relative z-50 hidden">
-            <div class="fixed inset-0 bg-gray-900/75 backdrop-blur-sm"></div>
-            <div class="fixed inset-0 z-10 flex items-center justify-center p-4">
-                <div class="bg-white rounded-lg shadow-xl w-full max-w-md p-6">
-                    <h3 class="text-lg font-bold mb-4 text-gray-900">Anexar Nota Fiscal / Edição Financeira</h3>
-                    <form id="form-nf-upload" class="space-y-4">
-                        <div class="bg-blue-50 border border-blue-100 p-3 rounded text-sm text-blue-800">
-                            Ao anexar a NF, os itens serão marcados automaticamente como <strong>Entregue</strong> na data de hoje.
-                        </div>
-    
-                        <!-- Campos Financeiros - Visível apenas para Aquisições/Admin -->
-                        <div id="nf-admin-fields" class="space-y-4 border-t border-gray-200 pt-4 hidden">
-    <h4 class="text-xs font-bold text-gray-500 uppercase tracking-wider">Dados Financeiros (NF)</h4>
-    <div class="grid grid-cols-2 gap-4">
-        <div class="col-span-2">
-            <label class="block text-xs font-medium text-gray-700 mb-1">Data do Dia (Referência de Competência)</label>
-            <input name="dataDoDia" id="data-do-dia" type="date" required class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-        </div>
-        <div>
-            <label class="block text-xs font-medium text-gray-700 mb-1">FIN</label>
-            <input name="fin" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-        </div>
-        <div>
-            <label class="block text-xs font-medium text-gray-700 mb-1">Modalidade NF</label>
-            <select name="modalidadeNF" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border bg-white">
-                <option value="Produto">Produto</option>
-                <option value="Serviço">Serviço</option>
-            </select>
-        </div>
-        <div>
-            <label class="block text-xs font-medium text-gray-700 mb-1">Data Emissão NF</label>
-            <input name="dataEmissao" type="date" required class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-        </div>
-        <div>
-            <label class="block text-xs font-medium text-gray-700 mb-1">Data Vcto</label>
-            <input name="dataVcto" type="date" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border">
-        </div>
-        
-        <div class="col-span-2">
-            <label class="block text-xs font-medium text-gray-700 mb-1">Observações da Nota / Entrega</label>
-            <textarea name="obsNF" rows="2" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm p-2 border" placeholder="Ex: Entrega parcial, pendente boleto..."></textarea>
-        </div>
-        </div>
-</div>
-                        
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700 mb-1">Arquivo da NF</label>
-                            <!-- Adicionei data-currentnfurl no form para rastrear se já existe NF -->
-                            <input type="file" id="file-nf-upload" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100">
-                        </div>
-                        <div class="flex justify-end gap-2 pt-2">
-                             <button type="button" onclick="closeNFModal()" class="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50">Cancelar</button>
-                             <button type="submit" class="px-4 py-2 bg-green-600 text-white rounded-md text-sm font-medium hover:bg-green-700 shadow-sm">Salvar Dados e Recebimento</button>
-                        </div>
-                    </form>
-                </div>
+<div id="modal-nf" class="relative z-50 hidden">
+    <div class="fixed inset-0 bg-gray-900/75 backdrop-blur-sm"></div>
+    <div class="fixed inset-0 z-10 flex items-center justify-center p-4">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-lg p-6 max-h-[90vh] overflow-y-auto">
+            <h3 class="text-lg font-bold mb-2 text-gray-900">Lançamento de Nota Fiscal</h3>
+            
+            <div id="container-notas-existentes" class="mb-4 hidden">
+                <label class="block text-xs font-bold text-gray-500 uppercase mb-2">Notas Fiscais Já Vinculadas</label>
+                <div id="lista-notas-vinculadas" class="space-y-2 bg-gray-50 p-2 rounded border border-gray-200">
+                    </div>
             </div>
+
+            <form id="form-nf-upload" class="space-y-4">
+                <div class="bg-blue-50 border border-blue-100 p-3 rounded text-sm text-blue-800">
+                    <p>Preencha os dados da <strong>nova nota</strong> que chegou. Ela será adicionada ao histórico deste pedido.</p>
+                </div>
+
+                <div id="nf-admin-fields" class="space-y-4 border-t border-gray-200 pt-4">
+                    <div class="grid grid-cols-2 gap-4">
+                        <div class="col-span-2">
+                            <label class="block text-xs font-medium text-gray-700 mb-1">Data de Recebimento (Hoje)</label>
+                            <input name="dataDoDia" id="data-do-dia" type="date" required class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-700 mb-1">Número da NF (FIN)</label>
+                            <input name="fin" id="input-nf-numero" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border" placeholder="Nº 12345">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-700 mb-1">Valor desta Nota (R$)</label>
+                            <input type="number" step="0.01" name="valorNota" id="input-nf-valor" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border" placeholder="0.00">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-700 mb-1">Emissão</label>
+                            <input name="dataEmissao" type="date" required class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-700 mb-1">Vencimento</label>
+                            <input name="dataVcto" type="date" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border">
+                        </div>
+                        
+                        <div class="col-span-2">
+                            <label class="block text-xs font-medium text-gray-700 mb-1">Observações (Parcial? Final?)</label>
+                            <textarea name="obsNF" rows="2" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border" placeholder="Ex: Entrega parcial, faltam 10 unidades..."></textarea>
+                        </div>
+                    </div>
+                </div>
+                        
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Arquivo da NF (PDF/Foto)</label>
+                    <input type="file" id="file-nf-upload" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700">
+                </div>
+
+                <div class="flex justify-end gap-2 pt-2 border-t mt-2">
+                     <button type="button" onclick="closeNFModal()" class="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50">Cancelar</button>
+                     <button type="submit" class="px-4 py-2 bg-green-600 text-white rounded-md text-sm font-medium hover:bg-green-700 shadow-sm">Adicionar Nota</button>
+                </div>
+            </form>
         </div>
+    </div>
+</div>
     
         <!-- Modal Cotação (Novo) -->
         <div id="modal-ficha-cotacao" class="relative z-50 hidden">
@@ -6934,19 +6958,28 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
                     </div>
 
                     <details class="bg-gray-50 p-2 rounded border border-gray-200">
-                        <summary class="text-xs font-bold text-gray-500 uppercase cursor-pointer">Ver Dados do Cadastro (CNPJ, Contrato, etc)</summary>
-                        <div class="grid grid-cols-3 gap-3 mt-3">
-                            <input id="proc-cnpj" readonly class="bg-gray-100 border-none text-xs w-full rounded" placeholder="CNPJ">
-                            <input id="proc-contrato-base" readonly class="bg-gray-100 border-none text-xs w-full rounded" placeholder="Contrato">
-                            <input id="proc-fluxo" readonly class="bg-gray-100 border-none text-xs w-full rounded" placeholder="Fluxo">
-                            <input id="proc-pagamento" readonly class="bg-gray-100 border-none text-xs w-full rounded" placeholder="Pagamento">
-                            <input id="proc-origem" readonly class="bg-gray-100 border-none text-xs w-full rounded" placeholder="Origem">
-                            <input id="proc-rn-unidade" readonly class="bg-gray-100 border-none text-xs w-full rounded" placeholder="RN Unidade">
-                            <input id="proc-descricao" readonly class="col-span-3 bg-gray-100 border-none text-xs w-full rounded" placeholder="Descrição">
-                            <input type="hidden" id="proc-justificativa">
-                            <input type="hidden" id="proc-obs-geral">
-                        </div>
-                    </details>
+    <summary class="text-xs font-bold text-gray-500 uppercase cursor-pointer">Ver Dados do Cadastro (CNPJ, Contrato, etc)</summary>
+    <div class="grid grid-cols-3 gap-3 mt-3">
+        <input id="proc-cnpj" readonly class="bg-gray-100 border-none text-xs w-full rounded" placeholder="CNPJ">
+        <input id="proc-contrato-base" readonly class="bg-gray-100 border-none text-xs w-full rounded" placeholder="Contrato">
+        <input id="proc-fluxo" readonly class="bg-gray-100 border-none text-xs w-full rounded" placeholder="Fluxo">
+        <input id="proc-pagamento" readonly class="bg-gray-100 border-none text-xs w-full rounded" placeholder="Pagamento">
+        <input id="proc-origem" readonly class="bg-gray-100 border-none text-xs w-full rounded" placeholder="Origem">
+        <input id="proc-rn-unidade" readonly class="bg-gray-100 border-none text-xs w-full rounded" placeholder="RN Unidade">
+        
+        <div class="col-span-3">
+            <label class="block text-[10px] font-bold text-gray-400 uppercase mb-1">Breve Descrição</label>
+            <input id="proc-descricao" readonly class="bg-gray-100 border-none text-xs w-full rounded" placeholder="Descrição">
+        </div>
+
+        <div class="col-span-3 border-t border-gray-200 pt-2 mt-1">
+            <label class="block text-[10px] font-bold text-gray-400 uppercase mb-1">Justificativa da Contratação</label>
+            <textarea id="proc-justificativa" readonly rows="2" class="bg-gray-100 border-none text-xs w-full rounded resize-none text-gray-700" placeholder="Sem justificativa cadastrada..."></textarea>
+        </div>
+
+        <input type="hidden" id="proc-obs-geral">
+    </div>
+</details>
 
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-2">3. Selecione os Itens, Defina Valores e RNs</label>
@@ -7042,37 +7075,70 @@ document.getElementById('form-agrupar').addEventListener('submit', async e => {
 <div id="modal-status-contrato" class="relative z-50 hidden">
     <div class="fixed inset-0 bg-gray-900/75 backdrop-blur-sm transition-opacity"></div>
     <div class="fixed inset-0 z-10 flex items-center justify-center p-4">
-        <div class="bg-white rounded-lg shadow-xl w-full max-w-sm p-6">
-            <h3 class="text-lg font-bold mb-4 text-gray-900">Aprovação / Status Contrato</h3>
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-lg p-6"> <h3 class="text-lg font-bold mb-4 text-gray-900 border-b pb-2">Editar Dados Financeiros & Status</h3>
             
             <form id="form-status-contrato" class="space-y-4">
                 <input type="hidden" id="edit-contrato-id">
                 
-                <div>
-                    <label class="block text-xs font-bold text-gray-700 uppercase mb-1">Status Atual</label>
-                    <select id="edit-contrato-status" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border bg-white">
-                        <option value="Processado">Processado (Recém Criado)</option>
-                        <option value="Em Aprovação">Em Aprovação</option>
-                        <option value="Aprovado Pagamento">Aprovado Pagamento</option>
-                        <option value="Agendado">Agendado</option>
-                        <option value="Pago">Pago / Finalizado</option>
-                        <option value="Pendencia">Com Pendência</option>
-                    </select>
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-xs font-bold text-gray-700 uppercase mb-1">Status Atual</label>
+                        <select id="edit-contrato-status" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border bg-white">
+                            <option value="Processado">Processado</option>
+                            <option value="Em Aprovação">Em Aprovação</option>
+                            <option value="Aprovado Pagamento">Aprovado Pagamento</option>
+                            <option value="Agendado">Agendado</option>
+                            <option value="Pago">Pago / Finalizado</option>
+                            <option value="Pendencia">Com Pendência</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold text-gray-700 uppercase mb-1">Data Pagto / Previsão</label>
+                        <input type="date" id="edit-contrato-data-pag" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border">
+                    </div>
                 </div>
 
-                <div>
-                    <label class="block text-xs font-bold text-gray-700 uppercase mb-1">Data Pagamento / Previsão</label>
-                    <input type="date" id="edit-contrato-data-pag" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border">
+                <div class="bg-gray-50 p-3 rounded border border-gray-200">
+                    <h4 class="text-xs font-bold text-gray-500 uppercase mb-3">Dados da Nota Fiscal / Boleto</h4>
+                    
+                    <div class="grid grid-cols-2 gap-3 mb-3">
+                        <div>
+                            <label class="block text-xs font-medium text-gray-700 mb-1">Data do Dia (Competência)</label>
+                            <input type="date" id="edit-contrato-data-dia" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-1.5 border">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-700 mb-1">FIN (ID Financeiro)</label>
+                            <input type="text" id="edit-contrato-fin" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-1.5 border">
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-3 gap-3 mb-3">
+                        <div class="col-span-1">
+                            <label class="block text-xs font-medium text-gray-700 mb-1">Modalidade</label>
+                            <select id="edit-contrato-modalidade" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-1.5 border bg-white">
+                                <option value="Serviço">Serviço</option>
+                                <option value="Produto">Produto</option>
+                            </select>
+                        </div>
+                        <div class="col-span-1">
+                            <label class="block text-xs font-medium text-gray-700 mb-1">Emissão NF</label>
+                            <input type="date" id="edit-contrato-emissao" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-1.5 border">
+                        </div>
+                        <div class="col-span-1">
+                            <label class="block text-xs font-medium text-gray-700 mb-1">Vencimento</label>
+                            <input type="date" id="edit-contrato-vcto" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-1.5 border">
+                        </div>
+                    </div>
                 </div>
 
                 <div>
                     <label class="block text-xs font-bold text-gray-700 uppercase mb-1">Observações Financeiras</label>
-                    <textarea id="edit-contrato-obs" rows="3" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border" placeholder="Ex: Liberado para pagamento dia 10..."></textarea>
+                    <textarea id="edit-contrato-obs" rows="2" class="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border" placeholder="Ex: Liberado, pendente assinatura..."></textarea>
                 </div>
 
                 <div class="flex justify-end gap-2 pt-2 border-t">
                     <button type="button" onclick="document.getElementById('modal-status-contrato').classList.add('hidden')" class="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50">Cancelar</button>
-                    <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700 shadow-sm">Salvar Status</button>
+                    <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700 shadow-sm">Salvar Dados</button>
                 </div>
             </form>
         </div>
